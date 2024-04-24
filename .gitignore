@@ -1,0 +1,10 @@
+Library/
+Temp/
+Logs/
+UserSettings/
+.vscode/
+**/StreamingAssets/**/*.meta
+**/Comfy/output/
+**/Comfy/graph.json*
+*.sln
+*.csproj
