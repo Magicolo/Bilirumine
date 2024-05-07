@@ -1,9 +1,10 @@
+.vscode/
 Library/
 Temp/
 Logs/
 UserSettings/
-.vscode/
-**/StreamingAssets/**/*.meta
+Assets/StreamingAssets/**/*.meta
+Assets/TextMesh Pro*
 **/Comfy/output/
 **/Comfy/graph.json*
 *.sln

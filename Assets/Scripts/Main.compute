@@ -1,0 +1,143 @@
+#pragma kernel Update
+
+float Delta;
+float Time;
+uint Width;
+uint Height;
+float4 Seed;
+bool Clear;
+
+Texture2D<float4> CameraInput;
+RWTexture2D<float4> Output;
+
+bool isShorter2(float2 value, float length) {
+    return (value.x * value.x + value.y * value.y) < (length * length);
+}
+
+bool isLonger2(float2 value, float length) {
+    return (value.x * value.x + value.y * value.y) >= (length * length);
+}
+
+bool isLonger3(float3 value, float length) {
+    return (value.x * value.x + value.y * value.y + value.z * value.z) >= (length * length);
+}
+
+bool isLonger4(float4 value, float length) {
+    return (value.x * value.x + value.y * value.y + value.z * value.z + value.w * value.w) >= (length * length);
+}
+
+uint wrap1(int value, uint bound) {
+    value %= bound;
+    return value + (value < 0) * bound;
+}
+
+uint2 wrap2(int2 value, uint2 bound) {
+    return uint2(wrap1(value.x, bound.x), wrap1(value.y, bound.y));
+}
+
+float fix1(float value)
+{
+    if (value > -1E10 && value < 1E10)
+        return value;
+    else
+        return 0;
+}
+
+float4 fix4(float4 value)
+{
+    return float4(fix1(value.x), fix1(value.y), fix1(value.z), fix1(value.w));
+}
+
+// Credit: http://lolengine.net/blog/2013/07/27/rgb-to-hsv-in-glsl
+float3 rgb2hsv(float3 c)
+{
+    float4 K = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    float4 p = c.g < c.b ? float4(c.bg, K.wz) : float4(c.gb, K.xy);
+    float4 q = c.r < p.x ? float4(p.xyw, c.r) : float4(c.r, p.yzx);
+
+    float d = q.x - min(q.w, q.y);
+    float e = 1.0e-10;
+    return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+// Credit: http://lolengine.net/blog/2013/07/27/rgb-to-hsv-in-glsl
+float3 hsv2rgb(float3 c)
+{
+    float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
+}
+
+float polarize1(float value, float amount)
+{
+    value = clamp(value, 0.0, 1.0) * 2.0 - 1.0;
+    amount = clamp(amount, 0.0, 1.0) * 2.0;
+    return value / (2.0 - amount + amount * abs(value)) + 0.5;
+}
+
+float2 polarize2(float2 value, float amount)
+{
+    return float2(polarize1(value.x, amount), polarize1(value.y, amount));
+}
+
+float3 polarize3(float3 value, float amount)
+{
+    return float3(polarize1(value.x, amount), polarize1(value.y, amount), polarize1(value.z, amount));
+}
+
+float4 polarize4(float4 value, float4 amount)
+{
+    return float4(polarize1(value.x, amount.x), polarize1(value.y, amount.y), polarize1(value.z, amount.z), polarize1(value.w, amount.w));
+}
+
+float random(float2 index)
+{
+    index += float2(Time, -Time);
+    float2 noise = (frac(sin(dot(index, float2(12.9898, 78.233) * 2.0)) * 43758.5453));
+    return abs(noise.x + noise.y) * 0.5;
+}
+
+float random1(float2 index)
+{
+    return random(index * Seed.xy);
+}
+
+float2 random2(float2 index)
+{
+    return float2(random(index.xy * Seed.xz), random(index.xy * Seed.yw));
+}
+
+float4 shift(float4 color, float hue, float saturation, float value)
+{
+    const float3 hsv = rgb2hsv(color.xyz);
+    const float3 rgb = hsv2rgb(float3(hsv.x + hue, hsv.y + saturation, hsv.z + value));
+    return float4(rgb, color.w);
+}
+
+float4 colorize(float4 color, float amount)
+{
+    const float3 hsv = rgb2hsv(color.xyz);
+    const float3 rgb = hsv2rgb(float3(hsv.x, clamp(hsv.y * (1.0 + amount), 0.0, 1.0), hsv.z));
+    return float4(rgb, color.w);
+}
+
+[numthreads(8,4,1)]
+void Update(uint3 id : SV_DispatchThreadID)
+{
+    // const float CameraJitter = 10;
+    // const float CameraThreshold = 0.5;
+    // const float CameraContrast = 2.5;
+    // const float CameraColorize = 2.5;
+
+    // float4 cameraInput = CameraInput[uint2(Width - id.x - 1, id.y)];
+    // cameraInput = pow(abs(cameraInput), CameraContrast);
+    // cameraInput = colorize(cameraInput, CameraColorize);
+    // const bool cameraValid = any(cameraInput.xyz >= float3(CameraThreshold, CameraThreshold, CameraThreshold));
+    // cameraInput *= cameraValid;
+    // const float cameraJitter = clamp(CameraJitter * Delta, 0.0, 1.0);
+    // const float4 cameraOutput = lerp(CameraOutput[id.xy], cameraInput, cameraJitter);
+
+    // CameraOutput[id.xy] = fix4(cameraOutput) * !Clear;
+    // Output[id.xy] = fix4(clamp(cameraOutput, 0, 100));
+    Output[id.xy] = CameraInput[id.xy];
+}
