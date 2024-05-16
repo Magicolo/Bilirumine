@@ -15,7 +15,6 @@ using TMPro;
 using System.Collections.Generic;
 using UnityEngine.Rendering;
 using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
 
 public sealed class Main : MonoBehaviour
 {

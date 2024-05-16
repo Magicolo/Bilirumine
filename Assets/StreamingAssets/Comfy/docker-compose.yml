@@ -6,10 +6,10 @@ services:
   comfy:
     image: comfy
     volumes:
-      - ./output:/comfy/output
-      - ./entry.sh:/comfy/entry.sh
-      - comfy:/comfy/models
-    entrypoint: /comfy/entry.sh
+      - ./input:/input
+      - ~/Projects/ai/comfy/Comfy:/comfy
+      - comfy:/root/.cache
+    entrypoint: python /input/main.py
     deploy:
       resources:
         reservations:

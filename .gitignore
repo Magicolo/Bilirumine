@@ -2,6 +2,7 @@
 Library/
 Temp/
 Logs/
+Builds/
 UserSettings/
 Assets/StreamingAssets/**/*.meta
 Assets/TextMesh Pro*
