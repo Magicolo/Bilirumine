@@ -2,60 +2,69 @@
 
 using System.Diagnostics;
 using UnityEngine;
-using System.Text.Json;
 using System.IO;
 using System;
 using System.Collections.Concurrent;
 using UnityEngine.Experimental.Rendering;
-using System.Text.Json.Serialization;
 using System.Collections;
 using System.Threading.Tasks;
 using TMPro;
 using System.Linq;
 
+/*
+    TODO:
+    - When moving, drop the resolution to level 0.
+        - Ideally, accelerate by going through levels 4-3-2-1-0 for a seemless decrease in resolution.
+        - Conversly decelerate by going through levels 0-1-2-3-4 for a seemless increase in resolution.
+        - Note that changing the resolution will result in a 'natural' acceleration/deceleration.
+
+*/
 public sealed class Comfy : MonoBehaviour
 {
+    struct Inputs
+    {
+        public bool Left;
+        public bool Right;
+        public bool Up;
+        public bool Down;
+        public bool Plus;
+        public bool Minus;
+        public bool Tab;
+        public bool Shift;
+        public bool Space;
+        public bool _0;
+        public bool _1;
+        public bool _2;
+        public bool _3;
+        public bool _4;
+    }
     sealed record State
     {
-        public bool Run = true;
-        public uint Width { get; set; }
-        public uint Height { get; set; }
+        public int Identifier { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
         public double Zoom { get; set; }
         public double Left { get; set; }
         public double Right { get; set; }
         public double Bottom { get; set; }
         public double Top { get; set; }
+        public bool Stop { get; set; }
     }
 
-    public bool Run = true;
-    public uint Width = 768;
-    public uint Height = 512;
+    public int Width = 768;
+    public int Height = 512;
     public int Zoom = 0;
-    public int X = 0;
-    public int Y = 0;
-    [Range(0.5f, 2f)]
-    public double Speed = 1.0;
     public Renderer Output = default!;
     public TMP_Text Debug = default!;
 
-    (bool left, bool right, bool up, bool down, bool plus, bool minus, bool tab, bool shift, bool space) _inputs = default;
+    Inputs _inputs = default;
 
     IEnumerator Start()
     {
-        var scale = Output.transform.localScale;
-        scale.x = -scale.y * Width / Height;
-        Output.transform.localScale = scale;
-
+        var x = 0;
+        var y = 0;
         var path = Path.Join(Application.streamingAssetsPath, "Comfy", "docker-compose.yml");
         Kill();
-        var options = new JsonSerializerOptions(JsonSerializerOptions.Default)
-        {
-            PropertyNameCaseInsensitive = true,
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            NumberHandling = JsonNumberHandling.AllowReadingFromString,
-            WriteIndented = false,
-        };
         using var process = Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' run --interactive --rm comfy")
         {
             RedirectStandardInput = true,
@@ -68,40 +77,60 @@ public sealed class Comfy : MonoBehaviour
         using var input = process.StandardInput;
         using var output = process.StandardOutput;
         using var error = process.StandardError;
-        var textures = (
-            main: new Texture2D((int)Width, (int)Height, GraphicsFormat.R8G8B8_UNorm, TextureCreationFlags.DontInitializePixels),
-            load: new Texture2D((int)Width, (int)Height, GraphicsFormat.R8G8B8_UNorm, TextureCreationFlags.DontInitializePixels)
-        );
+
         var watch = Stopwatch.StartNew();
-        var delta = 0.1;
+        var delta = 0.1f;
         var deltas = new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 256).Select(_ => TimeSpan.FromSeconds(delta)));
         var frames = new ConcurrentQueue<byte[]>();
         _ = Task.WhenAll(ReadOutput(), ReadError());
-        var time = (double)Time.time;
+        var speed = 1f;
+        StartCoroutine(UpdateTexture());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateInput());
         StartCoroutine(UpdateDebug());
-        while (true)
+        while (true) yield return null;
+
+        IEnumerator UpdateTexture()
         {
-            if (frames.TryDequeue(out var frame))
+            var time = (double)Time.time;
+            var format = GraphicsFormat.R8G8B8_UNorm;
+            var flag = TextureCreationFlags.DontInitializePixels;
+            var main = new Texture2D(Width, Height, format, flag);
+            var load = new Texture2D(Width, Height, format, flag);
+            while (true)
             {
-                while (Time.time - time < delta) yield return null;
-                time += delta;
-                textures.load.LoadRawTextureData(frame);
-                textures.load.Apply();
-                textures = (textures.load, textures.main);
-                Output.material.mainTexture = textures.main;
+                if (frames.TryDequeue(out var frame))
+                {
+                    while (Time.time - time < delta / speed) yield return null;
+                    time += delta / speed;
+
+                    if (load.width != Width || load.height != Height)
+                    {
+                        if (load.width * load.height * 3 != frame.Length)
+                        {
+                            load = new Texture2D(Width, Height, format, flag);
+                            var scale = Output.transform.localScale;
+                            scale.x = -scale.y * Width / Height;
+                            Output.transform.localScale = scale;
+                        }
+                    }
+                    load.LoadRawTextureData(frame);
+                    load.Apply();
+                    Output.material.mainTexture = load;
+                    (main, load) = (load, main);
+                }
+                else time = (double)Time.time;
+                yield return null;
             }
-            else time = (double)Time.time;
-            yield return null;
         }
 
         IEnumerator UpdateDelta()
         {
             while (true)
             {
-                if (deltas.Count > 0) delta = deltas.Select(delta => delta.TotalSeconds / Speed).Average();
+                if (deltas.Count > 0) delta = deltas.Select(delta => (float)delta.TotalSeconds).Average();
+                if (frames.Count > 0) speed = Mathf.Lerp(speed, Mathf.Clamp(frames.Count / (2.5f / delta), 0.75f, 1.5f), Time.deltaTime / 5);
                 yield return null;
             }
         }
@@ -111,9 +140,16 @@ public sealed class Comfy : MonoBehaviour
             var show = Application.isEditor;
             while (true)
             {
-                if (_inputs.tab.Take()) show = !show;
+                if (_inputs.Tab.Take()) show = !show;
                 if (show)
-                    Debug.text = $"RATE: {1f / delta:00.00} | DELTA: {delta:0.0000} | FRAMES: {frames.Count:000} | RESOLUTION: {Width}x{Height} | ZOOM: {Zoom} | DIRECTION: ({X}, {Y})";
+                    Debug.text = $@"
+Rate: {1f / delta:00.00}
+Delta: {delta:0.0000}
+Speed: {speed:0.0000}
+Frames: {frames.Count:000}
+Resolution: {Width}x{Height}
+Zoom: {Zoom}
+Direction: ({x}, {y})";
                 else
                     Debug.text = "";
                 yield return null;
@@ -122,42 +158,59 @@ public sealed class Comfy : MonoBehaviour
 
         IEnumerator UpdateState()
         {
-            var last = default(State);
+            var counter = 0;
+            var old = default((int, int, int, int, int, int, int, int));
             while (true)
             {
-                var state = new State
-                {
-                    Run = Run,
-                    Width = Width,
-                    Height = Height,
-                    Left = Math.Max(X, 0),
-                    Right = Math.Min(X, 0),
-                    Top = Math.Max(Y, 0),
-                    Bottom = Math.Min(Y, 0),
-                    Zoom = Zoom,
-                };
-                if (last == state) yield return null;
+                var @new = (
+                    width: Width,
+                    height: Height,
+                    left: Math.Max(-x, 0),
+                    right: Math.Max(x, 0),
+                    bottom: Math.Max(-y, 0),
+                    top: Math.Max(y, 0),
+                    zoom: Zoom,
+                    stop: 0
+                );
+                if (old == @new) yield return null;
                 else
                 {
-                    var task = WriteInput(state);
+                    var task = Task.Run(async () =>
+                    {
+                        var line = $@"{{""identifier"":{++counter},""width"":{@new.width},""height"":{@new.height},""left"":{@new.left},""right"":{@new.right},""bottom"":{@new.bottom},""top"":{@new.top},""zoom"":{@new.zoom},""stop"":{@new.stop}}}";
+                        await input.WriteLineAsync(line);
+                        await input.FlushAsync();
+                    });
                     while (!task.IsCompleted) yield return null;
-                    last = state;
+                    old = @new;
                 }
             }
         }
 
         IEnumerator UpdateInput()
         {
-            var increment = 8;
             while (true)
             {
-                if (_inputs.left.Take()) X -= increment;
-                if (_inputs.right.Take()) X += increment;
-                if (_inputs.up.Take()) Y += increment;
-                if (_inputs.down.Take()) Y -= increment;
-                if (_inputs.plus.Take()) Zoom += increment;
-                if (_inputs.minus.Take() && Zoom >= increment) Zoom -= increment;
-                if (_inputs.space.Take()) Run = !Run;
+                var increment = 8;
+                var horizontal = Width / 4;
+                var vertical = Height / 4;
+
+                if (_inputs.Left.Take()) x = -horizontal;
+                else if (_inputs.Right.Take()) x = horizontal;
+                else x = 0;
+
+                if (_inputs.Down.Take()) y = -vertical;
+                else if (_inputs.Up.Take()) y = vertical;
+                else y = 0;
+
+                if (_inputs.Plus.Take()) Zoom += increment;
+                if (_inputs.Minus.Take() && Zoom >= increment) Zoom -= increment;
+
+                if (_inputs._0.Take()) (Width, Height) = (512, 256);
+                else if (_inputs._1.Take()) (Width, Height) = (640, 384);
+                else if (_inputs._2.Take()) (Width, Height) = (768, 512);
+                else if (_inputs._3.Take()) (Width, Height) = (896, 640);
+                else if (_inputs._4.Take()) (Width, Height) = (1024, 768);
                 yield return null;
             }
         }
@@ -165,12 +218,6 @@ public sealed class Comfy : MonoBehaviour
         void Kill()
         {
             try { Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill comfy")); } catch { }
-        }
-
-        async Task WriteInput(State state)
-        {
-            await input.WriteLineAsync(JsonSerializer.Serialize(state, options));
-            await input.FlushAsync();
         }
 
         async Task ReadOutput()
@@ -182,7 +229,7 @@ public sealed class Comfy : MonoBehaviour
                 try
                 {
                     var frame = Convert.FromBase64String(line);
-                    if (frame.Length == Width * Height * 3)
+                    if (frame.Length >= 256 * 256)
                     {
                         var now = watch.Elapsed;
                         frames.Enqueue(frame);
@@ -206,14 +253,19 @@ public sealed class Comfy : MonoBehaviour
 
     void Update()
     {
-        _inputs.left |= Input.GetKeyDown(KeyCode.LeftArrow);
-        _inputs.right |= Input.GetKeyDown(KeyCode.RightArrow);
-        _inputs.up |= Input.GetKeyDown(KeyCode.UpArrow);
-        _inputs.down |= Input.GetKeyDown(KeyCode.DownArrow);
-        _inputs.plus |= Input.GetKeyDown(KeyCode.Plus) || Input.GetKeyDown(KeyCode.KeypadPlus) || Input.GetKeyDown(KeyCode.Equals);
-        _inputs.minus |= Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus) || Input.GetKeyDown(KeyCode.Underscore);
-        _inputs.tab |= Input.GetKeyDown(KeyCode.Tab);
-        _inputs.shift |= Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-        _inputs.space |= Input.GetKeyDown(KeyCode.Space);
+        _inputs.Left |= Input.GetKey(KeyCode.LeftArrow);
+        _inputs.Right |= Input.GetKey(KeyCode.RightArrow);
+        _inputs.Up |= Input.GetKey(KeyCode.UpArrow);
+        _inputs.Down |= Input.GetKey(KeyCode.DownArrow);
+        _inputs.Plus |= Input.GetKeyDown(KeyCode.Plus) || Input.GetKeyDown(KeyCode.KeypadPlus) || Input.GetKeyDown(KeyCode.Equals);
+        _inputs.Minus |= Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus) || Input.GetKeyDown(KeyCode.Underscore);
+        _inputs.Tab |= Input.GetKeyDown(KeyCode.Tab);
+        _inputs.Shift |= Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+        _inputs.Space |= Input.GetKeyDown(KeyCode.Space);
+        _inputs._0 |= Input.GetKeyDown(KeyCode.Alpha0) || Input.GetKeyDown(KeyCode.Keypad0);
+        _inputs._1 |= Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1);
+        _inputs._2 |= Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2);
+        _inputs._3 |= Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3);
+        _inputs._4 |= Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4);
     }
 }

@@ -251,12 +251,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   Run: 1
-  Width: 768
-  Height: 512
-  Zoom: 0
-  X: 128
+  Width: 640
+  Height: 384
+  Zoom: 32
+  X: 0
   Y: 0
-  Speed: 1.2000000476837158
   Output: {fileID: 1576962035}
   Debug: {fileID: 1306941141}
 --- !u!1 &1306941139
