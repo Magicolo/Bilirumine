@@ -63,33 +63,37 @@ def clipped(name, prompt, clip):
 
 
 def iterate(state: dict, steps):
-    for output in steps:
-        if state["identifier"] < STOP:
-            break
-        elif output is None:
-            continue
-        else:
+    while state["version"] >= STOP:
+        output = next(steps)
+        if output is not None:
             return output
 
 
 def read(send):
-    global STATE, STOP
+    global IMAGE, STOP, BREAK
 
     with torch.inference_mode():
-        first = True
         while True:
-            state = ast.literal_eval(input())
-            old = STATE
-            new = {**old, **state}
-            STATE = new
-            if new["stop"] > 0:
-                STOP = new["stop"]
-            if first:
-                first = False
-                (image,) = EmptyImage().generate(
-                    new["width"], new["height"], batch_size=1, color=0
-                )
-                send.put((new, image), block=False)
+            try:
+                state = ast.literal_eval(input())
+                BREAK = max(BREAK, state["version"])
+                if state["stop"]:
+                    STOP = max(STOP, state["version"])
+                if state["image"] is not None:
+                    image = base64.b64decode(state["image"])
+                    image = numpy.frombuffer(image, dtype=numpy.uint8)
+                    image = image.astype(numpy.float32) / 255.0
+                    image = image.reshape(1, state["height"], state["width"], 3)
+                    image = torch.tensor(image)
+                elif IMAGE is None:
+                    (image,) = EmptyImage().generate(
+                        state["width"], state["height"], 1, 0
+                    )
+                else:
+                    image = IMAGE
+                send.put((state, image), block=False)
+            except Exception as exception:
+                error(exception)
 
 
 def extend(receive: SimpleQueue, send: SimpleQueue):
@@ -160,9 +164,12 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
             "dreamshaperXL_lightningInpaint.safetensors"
         )
         while True:
-            (state, loaded) = receive.get(block=True)
-            (scaled, zoomed) = iterate(state, steps(state, loaded))
-            send.put((state, scaled, zoomed), block=False)
+            try:
+                (state, loaded) = receive.get(block=True)
+                (scaled, zoomed) = iterate(state, steps(state, loaded))
+                send.put((state, scaled, zoomed), block=False)
+            except Exception as exception:
+                error(exception)
 
 
 def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
@@ -202,10 +209,17 @@ def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
             "dreamshaperXL_v21TurboDPMSDE.safetensors"
         )
         while True:
-            (state, scaled, zoomed) = receive.get(block=True)
-            (batched, decoded) = iterate(state, steps(state, scaled, zoomed))
-            send.put((state, batched), block=False)
-            loop.put((STATE, decoded), block=False)
+            try:
+                (state, scaled, zoomed) = receive.get(block=True)
+                (batched, decoded) = iterate(state, steps(state, scaled, zoomed))
+                send.put((state, batched), block=False)
+                if state["version"] >= BREAK:
+                    if state["next"] is None:
+                        loop.put((state, decoded), block=False)
+                    else:
+                        loop.put((state["next"], decoded), block=False)
+            except Exception as exception:
+                error(exception)
 
 
 def interpolate(receive: SimpleQueue, send: SimpleQueue):
@@ -236,47 +250,36 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
     with torch.inference_mode():
         interpolator = NODE_CLASS_MAPPINGS["RIFE VFI"]()
         while True:
-            (state, batched) = receive.get(block=True)
-            interpolated = iterate(state, steps(state, batched))
-            send.put((state, interpolated), block=False)
+            try:
+                (state, batched) = receive.get(block=True)
+                interpolated = iterate(state, steps(state, batched))
+                send.put((state, interpolated), block=False)
+            except Exception as exception:
+                error(exception)
 
 
 def write(receive: SimpleQueue):
-
-    def steps(state, interpolated):
-        yield None
-        images = interpolated[:-1]  # Skip last frame such that it is not repeated.
-        for image in images:
-            yield None
-            image = image.numpy().flatten()
-            yield None
-            image = numpy.clip(image * 255.0, 0, 255).astype(numpy.uint8)
-            yield None
-            response = base64.b64encode(image.tobytes()).decode("utf-8")
-            yield None
-            output(response)
-        yield True
+    global IMAGE
 
     with torch.inference_mode():
         while True:
-            (state, interpolated) = receive.get(block=True)
-            iterate(state, steps(state, interpolated))
-            torch.cuda.empty_cache()
+            try:
+                (state, interpolated) = receive.get(block=True)
+                images, IMAGE = (interpolated[:-1], interpolated[-1:])
+                for image in images:
+                    image = image.numpy().flatten()
+                    image = numpy.clip(image * 255.0, 0, 255).astype(numpy.uint8)
+                    image = base64.b64encode(image.tobytes()).decode("utf-8")
+                    output(
+                        f'{state["version"]},{state["width"]},{state["height"]},{image}'
+                    )
+                torch.cuda.empty_cache()
+            except Exception as exception:
+                error(exception)
 
-
-# NOTE: All prompts must be pre-encoded; the 'Clip' model is too large to keep in memory.
-STATE = {
-    "width": 512,
-    "height": 512,
-    "zoom": 0,
-    "left": 0,
-    "right": 0,
-    "top": 0,
-    "bottom": 0,
-    "positive": "(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.",
-    "negative": "(nude, naked, child, children, blurry, worst quality, low detail, monochrome, simple, centered)",
-}
+IMAGE = None
 STOP = 0
+BREAK = 0
 INPUT_LOCK = threading.Lock()
 OUTPUT_LOCK = threading.Lock()
 ERROR_LOCK = threading.Lock()

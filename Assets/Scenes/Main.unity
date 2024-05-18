@@ -250,12 +250,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1191b30df9d1d71cd8d760f37f0a2dc6, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Run: 1
   Width: 640
   Height: 384
   Zoom: 32
-  X: 0
-  Y: 0
   Output: {fileID: 1576962035}
   Debug: {fileID: 1306941141}
 --- !u!1 &1306941139
@@ -589,7 +586,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 100, y: -100, z: 1}
+  m_LocalScale: {x: 160, y: -100, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1009932808}

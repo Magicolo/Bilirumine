@@ -10,6 +10,7 @@ using System.Collections;
 using System.Threading.Tasks;
 using TMPro;
 using System.Linq;
+using System.Threading;
 
 /*
     TODO:
@@ -32,28 +33,53 @@ public sealed class Comfy : MonoBehaviour
         public bool Tab;
         public bool Shift;
         public bool Space;
-        public bool _0;
         public bool _1;
         public bool _2;
         public bool _3;
         public bool _4;
     }
-    sealed record State
+
+    record State
     {
-        public int Identifier { get; set; }
-        public double Width { get; set; }
-        public double Height { get; set; }
-        public double Zoom { get; set; }
-        public double Left { get; set; }
-        public double Right { get; set; }
-        public double Bottom { get; set; }
-        public double Top { get; set; }
-        public bool Stop { get; set; }
+        public int Version;
+        public int Width;
+        public int Height;
+        public int Left;
+        public int Right;
+        public int Bottom;
+        public int Top;
+        public int Zoom;
+        public bool Stop;
+        public string Positive = "(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.";
+        public string Negative = "(nude, naked, child, children, blurry, worst quality, low detail, monochrome, simple, centered)";
+        public string? Image;
+        public State? Next;
+
+        public override string ToString() =>
+            $@"{{""version"":{Version},""width"":{Width},""height"":{Height},""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""stop"":{(Stop ? "True" : "False")},""positive"":""{Positive}"",""negative"":""{Negative}"",""image"":{(Image is null ? "None" : @$"""{Image}""")},""next"":{Next?.ToString() ?? "None"}}}";
     }
 
-    public int Width = 768;
-    public int Height = 512;
-    public int Zoom = 0;
+    struct Frame
+    {
+        public int Version;
+        public int Width;
+        public int Height;
+        public byte[] Data;
+    }
+
+    static void Kill(string path)
+    {
+        try { Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill comfy")); } catch { }
+    }
+
+    static readonly (int width, int height)[] _resolutions =
+    {
+        (640, 384),
+        (768, 512),
+        (896, 640),
+        // (1024, 768),
+    };
+
     public Renderer Output = default!;
     public TMP_Text Debug = default!;
 
@@ -61,10 +87,8 @@ public sealed class Comfy : MonoBehaviour
 
     IEnumerator Start()
     {
-        var x = 0;
-        var y = 0;
         var path = Path.Join(Application.streamingAssetsPath, "Comfy", "docker-compose.yml");
-        Kill();
+        Kill(path);
         using var process = Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' run --interactive --rm comfy")
         {
             RedirectStandardInput = true,
@@ -72,16 +96,17 @@ public sealed class Comfy : MonoBehaviour
             RedirectStandardError = true,
             UseShellExecute = false,
         });
-        Application.quitting += () => { try { process.Kill(); } catch { } Kill(); };
+        Application.quitting += () => { try { process.Kill(); } catch { } Kill(path); };
 
         using var input = process.StandardInput;
         using var output = process.StandardOutput;
         using var error = process.StandardError;
 
+        var resolutions = (current: (width: 0, height: 0), next: (width: 0, height: 0));
         var watch = Stopwatch.StartNew();
         var delta = 0.1f;
-        var deltas = new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 256).Select(_ => TimeSpan.FromSeconds(delta)));
-        var frames = new ConcurrentQueue<byte[]>();
+        var deltas = new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta)));
+        var frames = new ConcurrentQueue<Frame>();
         _ = Task.WhenAll(ReadOutput(), ReadError());
         var speed = 1f;
         StartCoroutine(UpdateTexture());
@@ -96,8 +121,8 @@ public sealed class Comfy : MonoBehaviour
             var time = (double)Time.time;
             var format = GraphicsFormat.R8G8B8_UNorm;
             var flag = TextureCreationFlags.DontInitializePixels;
-            var main = new Texture2D(Width, Height, format, flag);
-            var load = new Texture2D(Width, Height, format, flag);
+            var main = default(Texture2D);
+            var load = default(Texture2D);
             while (true)
             {
                 if (frames.TryDequeue(out var frame))
@@ -105,20 +130,14 @@ public sealed class Comfy : MonoBehaviour
                     while (Time.time - time < delta / speed) yield return null;
                     time += delta / speed;
 
-                    if (load.width != Width || load.height != Height)
-                    {
-                        if (load.width * load.height * 3 != frame.Length)
-                        {
-                            load = new Texture2D(Width, Height, format, flag);
-                            var scale = Output.transform.localScale;
-                            scale.x = -scale.y * Width / Height;
-                            Output.transform.localScale = scale;
-                        }
-                    }
-                    load.LoadRawTextureData(frame);
+                    if (load == null || load.width != frame.Width || load.height != frame.Height)
+                        load = new Texture2D(frame.Width, frame.Height, format, flag);
+
+                    load.LoadRawTextureData(frame.Data);
                     load.Apply();
                     Output.material.mainTexture = load;
                     (main, load) = (load, main);
+                    resolutions.current = (frame.Width, frame.Height);
                 }
                 else time = (double)Time.time;
                 yield return null;
@@ -129,8 +148,8 @@ public sealed class Comfy : MonoBehaviour
         {
             while (true)
             {
-                if (deltas.Count > 0) delta = deltas.Select(delta => (float)delta.TotalSeconds).Average();
-                if (frames.Count > 0) speed = Mathf.Lerp(speed, Mathf.Clamp(frames.Count / (2.5f / delta), 0.75f, 1.5f), Time.deltaTime / 5);
+                if (deltas.Count > 0) delta = Mathf.Lerp(delta, deltas.Select(delta => (float)delta.TotalSeconds).Average(), Time.deltaTime);
+                if (frames.Count > 0) speed = Mathf.Lerp(speed, Mathf.Clamp(frames.Count / (5f / delta), 0.75f, 1.5f), Time.deltaTime);
                 yield return null;
             }
         }
@@ -142,14 +161,14 @@ public sealed class Comfy : MonoBehaviour
             {
                 if (_inputs.Tab.Take()) show = !show;
                 if (show)
+                {
                     Debug.text = $@"
 Rate: {1f / delta:00.00}
 Delta: {delta:0.0000}
 Speed: {speed:0.0000}
 Frames: {frames.Count:000}
-Resolution: {Width}x{Height}
-Zoom: {Zoom}
-Direction: ({x}, {y})";
+Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolutions.current == resolutions.next ? $"" : $"-> {resolutions.next.width}x{resolutions.next.height}")}";
+                }
                 else
                     Debug.text = "";
                 yield return null;
@@ -159,31 +178,39 @@ Direction: ({x}, {y})";
         IEnumerator UpdateState()
         {
             var counter = 0;
-            var old = default((int, int, int, int, int, int, int, int));
+            // var old = default((int, int, int, int, int, int, int));
+            var first = true;
             while (true)
             {
-                var @new = (
-                    width: Width,
-                    height: Height,
-                    left: Math.Max(-x, 0),
-                    right: Math.Max(x, 0),
-                    bottom: Math.Max(-y, 0),
-                    top: Math.Max(y, 0),
-                    zoom: Zoom,
-                    stop: 0
-                );
-                if (old == @new) yield return null;
-                else
+                if (first.Take())
                 {
                     var task = Task.Run(async () =>
                     {
-                        var line = $@"{{""identifier"":{++counter},""width"":{@new.width},""height"":{@new.height},""left"":{@new.left},""right"":{@new.right},""bottom"":{@new.bottom},""top"":{@new.top},""zoom"":{@new.zoom},""stop"":{@new.stop}}}";
-                        await input.WriteLineAsync(line);
+                        var version = Interlocked.Increment(ref counter);
+                        var (width, height) = _resolutions.Last();
+                        var state = new State { Version = version, Width = width, Height = height, Zoom = 32 };
+                        resolutions.next = (width, height);
+                        await input.WriteLineAsync($"{state}");
                         await input.FlushAsync();
                     });
                     while (!task.IsCompleted) yield return null;
-                    old = @new;
                 }
+                else if (_inputs.Left.Take())
+                {
+                    var task = Task.Run(async () =>
+                    {
+                        var version = Interlocked.Increment(ref counter);
+                        var (width, height) = _resolutions.Last();
+                        var state = _resolutions.Reverse().Concat(_resolutions).Aggregate(
+                            new State { Version = version, Width = width, Height = height, Zoom = 32, Stop = true },
+                            (state, resolution) => new State { Version = version, Width = resolution.width, Height = resolution.height, Left = 192, Stop = true, Next = state });
+                        resolutions.next = (width, height);
+                        await input.WriteLineAsync($"{state}");
+                        await input.FlushAsync();
+                    });
+                    while (!task.IsCompleted) yield return null;
+                }
+                else yield return null;
             }
         }
 
@@ -191,33 +218,27 @@ Direction: ({x}, {y})";
         {
             while (true)
             {
-                var increment = 8;
-                var horizontal = Width / 4;
-                var vertical = Height / 4;
+                // var increment = 8;
+                // var horizontal = Width / 4;
+                // var vertical = Height / 4;
 
-                if (_inputs.Left.Take()) x = -horizontal;
-                else if (_inputs.Right.Take()) x = horizontal;
-                else x = 0;
+                // if (_inputs.Left.Take()) x = -horizontal;
+                // else if (_inputs.Right.Take()) x = horizontal;
+                // else x = 0;
 
-                if (_inputs.Down.Take()) y = -vertical;
-                else if (_inputs.Up.Take()) y = vertical;
-                else y = 0;
+                // if (_inputs.Down.Take()) y = -vertical;
+                // else if (_inputs.Up.Take()) y = vertical;
+                // else y = 0;
 
-                if (_inputs.Plus.Take()) Zoom += increment;
-                if (_inputs.Minus.Take() && Zoom >= increment) Zoom -= increment;
+                // if (_inputs.Plus.Take()) Zoom += increment;
+                // if (_inputs.Minus.Take() && Zoom >= increment) Zoom -= increment;
 
-                if (_inputs._0.Take()) (Width, Height) = (512, 256);
-                else if (_inputs._1.Take()) (Width, Height) = (640, 384);
-                else if (_inputs._2.Take()) (Width, Height) = (768, 512);
-                else if (_inputs._3.Take()) (Width, Height) = (896, 640);
-                else if (_inputs._4.Take()) (Width, Height) = (1024, 768);
+                // if (_inputs._1.Take()) Resolution = 0;
+                // else if (_inputs._2.Take()) Resolution = 1;
+                // else if (_inputs._3.Take()) Resolution = 2;
+                // else if (_inputs._4.Take()) Resolution = 3;
                 yield return null;
             }
-        }
-
-        void Kill()
-        {
-            try { Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill comfy")); } catch { }
         }
 
         async Task ReadOutput()
@@ -228,19 +249,22 @@ Direction: ({x}, {y})";
                 var line = await output.ReadLineAsync();
                 try
                 {
-                    var frame = Convert.FromBase64String(line);
-                    if (frame.Length >= 256 * 256)
+                    var splits = line.Split(",");
+                    var frame = new Frame
                     {
-                        var now = watch.Elapsed;
-                        frames.Enqueue(frame);
-                        deltas.Enqueue(now - then);
-                        then = now;
-                        while (deltas.Count > 256) deltas.TryDequeue(out _);
-                    }
-                    else
-                        UnityEngine.Debug.Log(line);
+                        Version = int.Parse(splits[0]),
+                        Width = int.Parse(splits[1]),
+                        Height = int.Parse(splits[2]),
+                        Data = Convert.FromBase64String(splits[3])
+                    };
+                    var now = watch.Elapsed;
+                    frames.Enqueue(frame);
+                    deltas.Enqueue(now - then);
+                    then = now;
+                    while (deltas.Count > 250) deltas.TryDequeue(out _);
                 }
                 catch (FormatException) { UnityEngine.Debug.Log(line); }
+                catch (IndexOutOfRangeException) { UnityEngine.Debug.Log(line); }
                 catch (Exception exception) { UnityEngine.Debug.LogException(exception); }
             }
         }
@@ -253,16 +277,15 @@ Direction: ({x}, {y})";
 
     void Update()
     {
-        _inputs.Left |= Input.GetKey(KeyCode.LeftArrow);
-        _inputs.Right |= Input.GetKey(KeyCode.RightArrow);
-        _inputs.Up |= Input.GetKey(KeyCode.UpArrow);
-        _inputs.Down |= Input.GetKey(KeyCode.DownArrow);
+        _inputs.Left |= Input.GetKeyDown(KeyCode.LeftArrow);
+        _inputs.Right |= Input.GetKeyDown(KeyCode.RightArrow);
+        _inputs.Up |= Input.GetKeyDown(KeyCode.UpArrow);
+        _inputs.Down |= Input.GetKeyDown(KeyCode.DownArrow);
         _inputs.Plus |= Input.GetKeyDown(KeyCode.Plus) || Input.GetKeyDown(KeyCode.KeypadPlus) || Input.GetKeyDown(KeyCode.Equals);
         _inputs.Minus |= Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus) || Input.GetKeyDown(KeyCode.Underscore);
         _inputs.Tab |= Input.GetKeyDown(KeyCode.Tab);
         _inputs.Shift |= Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
         _inputs.Space |= Input.GetKeyDown(KeyCode.Space);
-        _inputs._0 |= Input.GetKeyDown(KeyCode.Alpha0) || Input.GetKeyDown(KeyCode.Keypad0);
         _inputs._1 |= Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1);
         _inputs._2 |= Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2);
         _inputs._3 |= Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3);
