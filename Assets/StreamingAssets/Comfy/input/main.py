@@ -44,22 +44,36 @@ def error(message):
         sys.stderr.flush()
 
 
-def clipped(name, prompt, clip):
+def clipped(name, prompt, clip, cache):
+    def encode(prompt, clip):
+        with torch.inference_mode():
+            encoder = CLIPTextEncode()
+            (encoded,) = encoder.encode(text=prompt, clip=clip)
+            return encoded
+
     folder = os.path.dirname(os.path.realpath(__file__))
-    folder = f"{folder}/.cache/clip"
-    path = f"{folder}/{name}_{hash(prompt)}.pkl"
-    os.makedirs(folder, exist_ok=True)
+    folder = f"{folder}/.cache"
+    path = f"{folder}/{name}_{hash(prompt)}.clip"
+
+    with CLIP_LOCK:
+        if path in CLIPS:
+            return CLIPS[path]
 
     if os.path.exists(path):
         with open(path, "rb") as file:
             return pickle.load(file)
 
-    with torch.inference_mode():
-        encoder = CLIPTextEncode()
-        (encoded,) = encoder.encode(text=prompt, clip=clip)
+    encoded = encode(prompt, clip)
+
+    if cache == "disk":
+        os.makedirs(folder, exist_ok=True)
         with open(path, "wb") as file:
             pickle.dump(encoded, file)
-        return encoded
+    elif cache == "memory":
+        with CLIP_LOCK:
+            CLIPS[path] = encoded
+
+    return encoded
 
 
 def iterate(state: dict, steps):
@@ -100,10 +114,6 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
 
     def steps(state, loaded):
         yield None
-        positive = clipped("extend", state["positive"], clip)
-        yield None
-        negative = clipped("extend", state["negative"], clip)
-        yield None
         # Apply random variation to outpaint to reduce recurring patterns.
         left = nudge(state["left"], 0.25)
         top = nudge(state["top"], 0.25)
@@ -122,32 +132,39 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
             image=scaled,
         )
         yield None
-        (padded, mask) = padder.expand_image(
-            cropped,
-            left,
-            top,
-            right,
-            bottom,
-            min(state["width"], state["height"]) // 4,
-        )
-        yield None
-        (encoded,) = encoder.encode(vae, padded, mask, 0)
-        yield None
-        (sampled,) = sampler.sample(
-            seed=seed(),
-            steps=1,
-            cfg=5,
-            sampler_name="lcm",
-            scheduler="sgm_uniform",
-            denoise=1.0,
-            model=model,
-            positive=positive,
-            negative=negative,
-            latent_image=encoded,
-        )
-        yield None
-        (decoded,) = decoder.decode(samples=sampled, vae=vae)
-        yield None
+        if left > 0 or top > 0 or right > 0 or bottom > 0:
+            (padded, mask) = padder.expand_image(
+                cropped,
+                left,
+                top,
+                right,
+                bottom,
+                min(state["width"], state["height"]) // 4,
+            )
+            yield None
+            (encoded,) = encoder.encode(vae, padded, mask, 0)
+            yield None
+            positive = clipped("extend", state["positive"], clip, state["cache"])
+            yield None
+            negative = clipped("extend", state["negative"], clip, state["cache"])
+            yield None
+            (sampled,) = sampler.sample(
+                seed=seed(),
+                steps=1,
+                cfg=5,
+                sampler_name="lcm",
+                scheduler="sgm_uniform",
+                denoise=1.0,
+                model=model,
+                positive=positive,
+                negative=negative,
+                latent_image=encoded,
+            )
+            yield None
+            (decoded,) = decoder.decode(samples=sampled, vae=vae)
+            yield None
+        else:
+            decoded = cropped
         (zoomed,) = scaler.upscale(
             decoded, "nearest-exact", state["width"], state["height"], "disabled"
         )
@@ -176,9 +193,9 @@ def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
 
     def steps(state: dict, scaled, zoomed):
         yield None
-        positive = clipped("detail", state["positive"], clip)
+        positive = clipped("detail", state["positive"], clip, state["cache"])
         yield None
-        negative = clipped("detail", state["negative"], clip)
+        negative = clipped("detail", state["negative"], clip, state["cache"])
         yield None
         (encoded,) = encoder.encode(vae, zoomed)
         yield None
@@ -280,6 +297,8 @@ def write(receive: SimpleQueue):
 IMAGE = None
 STOP = 0
 BREAK = 0
+CLIPS = {}
+CLIP_LOCK = threading.Lock()
 INPUT_LOCK = threading.Lock()
 OUTPUT_LOCK = threading.Lock()
 ERROR_LOCK = threading.Lock()

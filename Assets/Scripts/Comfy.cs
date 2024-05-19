@@ -11,15 +11,9 @@ using System.Threading.Tasks;
 using TMPro;
 using System.Linq;
 using System.Threading;
+using UnityEngine.Rendering;
+using Unity.Collections;
 
-/*
-    TODO:
-    - When moving, drop the resolution to level 0.
-        - Ideally, accelerate by going through levels 4-3-2-1-0 for a seemless decrease in resolution.
-        - Conversly decelerate by going through levels 0-1-2-3-4 for a seemless increase in resolution.
-        - Note that changing the resolution will result in a 'natural' acceleration/deceleration.
-
-*/
 public sealed class Comfy : MonoBehaviour
 {
     struct Inputs
@@ -50,13 +44,21 @@ public sealed class Comfy : MonoBehaviour
         public int Top;
         public int Zoom;
         public bool Stop;
+        public string Cache = Application.isEditor ? "memory" : "disk";
         public string Positive = "(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.";
         public string Negative = "(nude, naked, child, children, blurry, worst quality, low detail, monochrome, simple, centered)";
         public string? Image;
         public State? Next;
 
         public override string ToString() =>
-            $@"{{""version"":{Version},""width"":{Width},""height"":{Height},""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""stop"":{(Stop ? "True" : "False")},""positive"":""{Positive}"",""negative"":""{Negative}"",""image"":{(Image is null ? "None" : @$"""{Image}""")},""next"":{Next?.ToString() ?? "None"}}}";
+            $@"{{""version"":{Version},""width"":{Width},""height"":{Height},""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""cache"":""{Cache}"",""stop"":{(Stop ? "True" : "False")},""positive"":""{Positive}"",""negative"":""{Negative}"",""image"":{(Image is null ? "None" : @$"""{Image}""")},""next"":{Next?.ToString() ?? "None"}}}";
+    }
+
+    struct Picture
+    {
+        public int Width;
+        public int Height;
+        public string Data;
     }
 
     struct Frame
@@ -65,6 +67,18 @@ public sealed class Comfy : MonoBehaviour
         public int Width;
         public int Height;
         public byte[] Data;
+    }
+
+    [Serializable]
+    public sealed class CameraSettings
+    {
+        public int X = 128;
+        public int Y = 128;
+        public int Rate = 30;
+        public int Device = 0;
+        public bool Flip;
+        public Renderer Preview = default!;
+        public Camera Camera = default!;
     }
 
     static void Kill(string path)
@@ -80,6 +94,9 @@ public sealed class Comfy : MonoBehaviour
         // (1024, 768),
     };
 
+    static int _version = 0;
+
+    public CameraSettings Camera = new();
     public Renderer Output = default!;
     public TMP_Text Debug = default!;
 
@@ -107,20 +124,83 @@ public sealed class Comfy : MonoBehaviour
         var delta = 0.1f;
         var deltas = new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta)));
         var frames = new ConcurrentQueue<Frame>();
+        var pictures = new ConcurrentQueue<Picture>();
         _ = Task.WhenAll(ReadOutput(), ReadError());
         var speed = 1f;
+        StartCoroutine(UpdateCamera());
         StartCoroutine(UpdateTexture());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateInput());
         StartCoroutine(UpdateDebug());
-        while (true) yield return null;
+
+        while (true)
+        {
+            Cursor.visible = Application.isEditor;
+            yield return null;
+        }
+
+        IEnumerator UpdateCamera()
+        {
+            UnityEngine.Debug.Log($"Camera devices: {string.Join(", ", WebCamTexture.devices.Select(device => $"{device.name}: [{string.Join(", ", device.availableResolutions ?? Array.Empty<Resolution>())}]"))}");
+            if (!WebCamTexture.devices.TryAt(Camera.Device, out var device))
+            {
+                UnityEngine.Debug.LogWarning("Camera not found.");
+                yield break;
+            }
+
+            var texture = new WebCamTexture(device.name, Camera.X, Camera.Y, Camera.Rate)
+            {
+                autoFocusPoint = null,
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp,
+            };
+            texture.Play();
+            Application.quitting += texture.Stop;
+            while (texture.width < 32 && texture.height < 32) yield return null;
+            UnityEngine.Debug.Log($"Camera: {texture.deviceName} | Resolution: {texture.width}x{texture.height} | FPS: {texture.requestedFPS} | Graphics: {texture.graphicsFormat}");
+
+            var (width, height) = (texture.width, texture.height);
+            var buffer = new NativeArray<byte>(width * height * sizeof(float) * 3, Allocator.Persistent);
+            Application.quitting += AsyncGPUReadback.WaitAllRequests;
+            Application.quitting += buffer.Dispose;
+            Camera.Preview.material.mainTexture = texture;
+
+            var scale = Camera.Preview.transform.localScale;
+            scale.y = (Camera.Flip, scale.y) switch { (true, > 0f) or (false, < 0f) => -scale.y, _ => scale.y };
+            Camera.Preview.transform.localScale = scale;
+            while (true)
+            {
+                if (_inputs.Shift.Take())
+                {
+                    texture.Play();
+                    Camera.Preview.enabled = true;
+                }
+                else if (Camera.Preview.enabled)
+                {
+                    texture.Pause();
+                    var task = Task.Run(async () =>
+                    {
+                        await AsyncGPUReadback.RequestIntoNativeArrayAsync(ref buffer, texture);
+                        var image = Convert.ToBase64String(buffer.AsReadOnlySpan());
+                        pictures.Enqueue(new() { Width = width, Height = height, Data = image });
+                    });
+                    // TODO: Flash!
+                    while (!task.IsCompleted) yield return null;
+                    Camera.Preview.enabled = false;
+                }
+                else
+                {
+                    texture.Pause();
+                    Camera.Preview.enabled = false;
+                }
+                yield return null;
+            }
+        }
 
         IEnumerator UpdateTexture()
         {
             var time = (double)Time.time;
-            var format = GraphicsFormat.R8G8B8_UNorm;
-            var flag = TextureCreationFlags.DontInitializePixels;
             var main = default(Texture2D);
             var load = default(Texture2D);
             while (true)
@@ -131,7 +211,7 @@ public sealed class Comfy : MonoBehaviour
                     time += delta / speed;
 
                     if (load == null || load.width != frame.Width || load.height != frame.Height)
-                        load = new Texture2D(frame.Width, frame.Height, format, flag);
+                        load = new Texture2D(frame.Width, frame.Height, GraphicsFormat.R8G8B8_UNorm, TextureCreationFlags.DontInitializePixels);
 
                     load.LoadRawTextureData(frame.Data);
                     load.Apply();
@@ -177,41 +257,60 @@ Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolution
 
         IEnumerator UpdateState()
         {
-            var counter = 0;
             // var old = default((int, int, int, int, int, int, int));
             var first = true;
+            var (width, height) = _resolutions.Last();
+            var template = new State()
+            {
+                Width = width,
+                Height = height,
+                Zoom = 32
+            };
             while (true)
             {
                 if (first.Take())
                 {
-                    var task = Task.Run(async () =>
+                    var task = WriteInput(version => template with { Version = version });
+                    while (!task.IsCompleted) yield return null;
+                }
+                else if (pictures.TryDequeue(out var picture))
+                {
+                    var task = WriteInput(version => template with
                     {
-                        var version = Interlocked.Increment(ref counter);
-                        var (width, height) = _resolutions.Last();
-                        var state = new State { Version = version, Width = width, Height = height, Zoom = 32 };
-                        resolutions.next = (width, height);
-                        await input.WriteLineAsync($"{state}");
-                        await input.FlushAsync();
+                        Version = version,
+                        Width = picture.Width,
+                        Height = picture.Height,
+                        Image = picture.Data,
+                        Next = template with { Version = version },
                     });
                     while (!task.IsCompleted) yield return null;
                 }
                 else if (_inputs.Left.Take())
                 {
-                    var task = Task.Run(async () =>
-                    {
-                        var version = Interlocked.Increment(ref counter);
-                        var (width, height) = _resolutions.Last();
-                        var state = _resolutions.Reverse().Concat(_resolutions).Aggregate(
-                            new State { Version = version, Width = width, Height = height, Zoom = 32, Stop = true },
-                            (state, resolution) => new State { Version = version, Width = resolution.width, Height = resolution.height, Left = 192, Stop = true, Next = state });
-                        resolutions.next = (width, height);
-                        await input.WriteLineAsync($"{state}");
-                        await input.FlushAsync();
-                    });
+                    var task = WriteInput(version => _resolutions.Reverse().Concat(_resolutions).Aggregate(
+                        template with { Version = version, Stop = true },
+                        (state, resolution) => template with
+                        {
+                            Version = version,
+                            Width = resolution.width,
+                            Height = resolution.height,
+                            Left = 192,
+                            Stop = true,
+                            Next = state
+                        }));
                     while (!task.IsCompleted) yield return null;
                 }
                 else yield return null;
             }
+        }
+
+        async Task WriteInput(Func<int, State> get)
+        {
+            var version = Interlocked.Increment(ref _version);
+            var state = get(version);
+            resolutions.next = (state.Width, state.Height);
+            await input.WriteLineAsync($"{state}");
+            await input.FlushAsync();
         }
 
         IEnumerator UpdateInput()
