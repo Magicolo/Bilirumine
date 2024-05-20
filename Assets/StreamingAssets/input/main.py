@@ -282,6 +282,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
             except:
                 error(traceback.format_exc())
 
+
 def write(receive: SimpleQueue):
     global IMAGE
 
@@ -316,6 +317,7 @@ def write(receive: SimpleQueue):
                         torch.cuda.empty_cache()
                     except:
                         error(traceback.format_exc())
+
 
 IMAGE = None
 STOP = 0

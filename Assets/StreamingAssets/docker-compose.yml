@@ -1,10 +1,17 @@
+name: bilirumine
+
 volumes:
   comfy:
+    external: true
+  ollama:
     external: true
 
 services:
   comfy:
     image: comfy
+    build: 
+      context: .
+      dockerfile: ./comfy.Dockerfile
     ipc: host
     volumes:
       - ./input:/input
@@ -19,3 +26,12 @@ services:
           devices:
             - capabilities: [ gpu ]
               count: all
+
+  
+  ollama:
+    image: ollama
+    build: 
+      context: .
+      dockerfile: ./ollama.Dockerfile
+    volumes:
+      - ollama:/root/.ollama

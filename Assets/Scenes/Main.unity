@@ -429,9 +429,10 @@ MonoBehaviour:
     Flip: 1
     Preview: {fileID: 1770241723}
     Camera: {fileID: 1492505582}
+    Texture: {fileID: 0}
   Flash: {fileID: 475307205}
   Output: {fileID: 1576962035}
-  Debug: {fileID: 1306941141}
+  Statistics: {fileID: 1306941141}
 --- !u!1 &1306941139
 GameObject:
   m_ObjectHideFlags: 0
@@ -444,7 +445,7 @@ GameObject:
   - component: {fileID: 1306941142}
   - component: {fileID: 1306941141}
   m_Layer: 5
-  m_Name: Debug
+  m_Name: Statistics
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
