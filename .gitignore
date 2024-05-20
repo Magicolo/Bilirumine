@@ -1,4 +1,6 @@
 .vscode/
+**/.bridge/
+**/.cache/
 Library/
 Temp/
 Logs/

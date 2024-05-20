@@ -13,6 +13,8 @@ using System.Linq;
 using System.Threading;
 using UnityEngine.Rendering;
 using Unity.Collections;
+using UnityEngine.UI;
+using System.IO.MemoryMappedFiles;
 
 public sealed class Comfy : MonoBehaviour
 {
@@ -36,6 +38,7 @@ public sealed class Comfy : MonoBehaviour
     record State
     {
         public int Version;
+        public int Batch;
         public int Width;
         public int Height;
         public int Left;
@@ -43,15 +46,16 @@ public sealed class Comfy : MonoBehaviour
         public int Bottom;
         public int Top;
         public int Zoom;
+        public bool Skip;
         public bool Stop;
-        public string Cache = Application.isEditor ? "memory" : "disk";
-        public string Positive = "(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.";
-        public string Negative = "(nude, naked, child, children, blurry, worst quality, low detail, monochrome, simple, centered)";
-        public string? Image;
+        public string Cache = "";
+        public string Positive = "";
+        public string Negative = "";
+        public string Image = "";
         public State? Next;
 
         public override string ToString() =>
-            $@"{{""version"":{Version},""width"":{Width},""height"":{Height},""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""cache"":""{Cache}"",""stop"":{(Stop ? "True" : "False")},""positive"":""{Positive}"",""negative"":""{Negative}"",""image"":{(Image is null ? "None" : @$"""{Image}""")},""next"":{Next?.ToString() ?? "None"}}}";
+            $@"{{""version"":{Version},""width"":{Width},""height"":{Height},""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""cache"":""{Cache}"",""stop"":{(Stop ? "True" : "False")},""skip"":{(Skip ? "True" : "False")},""positive"":""{Positive}"",""negative"":""{Negative}"",""image"":""{Image}"",""next"":{Next?.ToString() ?? "None"}}}";
     }
 
     struct Picture
@@ -64,9 +68,13 @@ public sealed class Comfy : MonoBehaviour
     struct Frame
     {
         public int Version;
+        public int Loop;
+        public int Index;
+        public int Count;
         public int Width;
         public int Height;
-        public byte[] Data;
+        public int Offset;
+        public int Size;
     }
 
     [Serializable]
@@ -86,17 +94,52 @@ public sealed class Comfy : MonoBehaviour
         try { Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill comfy")); } catch { }
     }
 
+    static void Delete(string path)
+    {
+        try { Directory.Delete(path, true); } catch { }
+    }
+
+    static void Load(MemoryMappedFile memory, Frame frame, Texture2D target)
+    {
+        using (var access = memory.CreateViewAccessor())
+        {
+            unsafe
+            {
+                var pointer = (byte*)IntPtr.Zero;
+                try
+                {
+                    access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
+                    if (pointer == null)
+                    {
+                        UnityEngine.Debug.LogError("Failed to acquire pointer to shared memory.");
+                        return;
+                    }
+                    var source = (IntPtr)(pointer + frame.Offset);
+                    target.LoadRawTextureData(source, frame.Size);
+                }
+                finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
+            }
+        }
+        target.Apply();
+    }
+
+    static IEnumerable Wait(Task task)
+    {
+        while (!task.IsCompleted) yield return null;
+        if (task is { Exception: { } exception }) throw exception;
+    }
+
     static readonly (int width, int height)[] _resolutions =
     {
         (640, 384),
         (768, 512),
         (896, 640),
-        // (1024, 768),
     };
 
     static int _version = 0;
 
     public CameraSettings Camera = new();
+    public Image Flash = default!;
     public Renderer Output = default!;
     public TMP_Text Debug = default!;
 
@@ -104,29 +147,39 @@ public sealed class Comfy : MonoBehaviour
 
     IEnumerator Start()
     {
-        var path = Path.Join(Application.streamingAssetsPath, "Comfy", "docker-compose.yml");
-        Kill(path);
-        using var process = Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' run --interactive --rm comfy")
+        var comfy = Path.Join(Application.streamingAssetsPath, "Comfy");
+        var docker = Path.Join(comfy, "docker-compose.yml");
+        var cache = Path.Join(comfy, "input", ".cache");
+        var share = "/dev/shm/bilirumine";
+        Delete(cache);
+        Delete(share);
+        Kill(docker);
+        Directory.CreateDirectory(cache);
+
+        using var memory = MemoryMappedFile.CreateFromFile(share, FileMode.OpenOrCreate, "bilirumine", int.MaxValue, MemoryMappedFileAccess.ReadWrite);
+        Application.quitting += () => { try { memory.Dispose(); } catch { } Delete(share); };
+
+        using var process = Process.Start(new ProcessStartInfo("docker", $"compose --file '{docker}' run --interactive --rm comfy")
         {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
         });
-        Application.quitting += () => { try { process.Kill(); } catch { } Kill(path); };
+        Application.quitting += () => { try { process.Kill(); } catch { } Kill(docker); };
 
         using var input = process.StandardInput;
         using var output = process.StandardOutput;
         using var error = process.StandardError;
 
-        var resolutions = (current: (width: 0, height: 0), next: (width: 0, height: 0));
+        var resolutions = (width: 0, height: 0);
         var watch = Stopwatch.StartNew();
-        var delta = 0.1f;
-        var deltas = new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta)));
+        var delta = (image: 0.1f, batch: 5f, wait: 0.1f, speed: 1f);
+        var deltas = (
+            images: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta.image))),
+            batches: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 5).Select(_ => TimeSpan.FromSeconds(delta.batch))));
         var frames = new ConcurrentQueue<Frame>();
         var pictures = new ConcurrentQueue<Picture>();
-        _ = Task.WhenAll(ReadOutput(), ReadError());
-        var speed = 1f;
         StartCoroutine(UpdateCamera());
         StartCoroutine(UpdateTexture());
         StartCoroutine(UpdateState());
@@ -134,10 +187,10 @@ public sealed class Comfy : MonoBehaviour
         StartCoroutine(UpdateInput());
         StartCoroutine(UpdateDebug());
 
-        while (true)
+        foreach (var item in Wait(Task.WhenAll(ReadOutput(), ReadError())))
         {
             Cursor.visible = Application.isEditor;
-            yield return null;
+            yield return item;
         }
 
         IEnumerator UpdateCamera()
@@ -156,37 +209,41 @@ public sealed class Comfy : MonoBehaviour
                 wrapMode = TextureWrapMode.Clamp,
             };
             texture.Play();
-            Application.quitting += texture.Stop;
+            Application.quitting += () => { try { texture.Stop(); } catch { } };
             while (texture.width < 32 && texture.height < 32) yield return null;
             UnityEngine.Debug.Log($"Camera: {texture.deviceName} | Resolution: {texture.width}x{texture.height} | FPS: {texture.requestedFPS} | Graphics: {texture.graphicsFormat}");
 
             var (width, height) = (texture.width, texture.height);
-            var buffer = new NativeArray<byte>(width * height * sizeof(float) * 3, Allocator.Persistent);
-            Application.quitting += AsyncGPUReadback.WaitAllRequests;
-            Application.quitting += buffer.Dispose;
+            var buffer = new NativeArray<byte>(width * height * 4, Allocator.Persistent);
+            Application.quitting += () => { try { AsyncGPUReadback.WaitAllRequests(); } catch { } };
+            Application.quitting += () => { try { buffer.Dispose(); } catch { } };
             Camera.Preview.material.mainTexture = texture;
 
             var scale = Camera.Preview.transform.localScale;
             scale.y = (Camera.Flip, scale.y) switch { (true, > 0f) or (false, < 0f) => -scale.y, _ => scale.y };
             Camera.Preview.transform.localScale = scale;
+            Camera.Preview.enabled = false;
+            texture.Pause();
+
             while (true)
             {
                 if (_inputs.Shift.Take())
                 {
+                    var task = WriteInput(version => new() { Version = version, Skip = true, Stop = true });
                     texture.Play();
+                    yield return null;
                     Camera.Preview.enabled = true;
+                    foreach (var item in Wait(task)) yield return item;
                 }
                 else if (Camera.Preview.enabled)
                 {
+                    Flash.color = Flash.color.With(a: 1f);
                     texture.Pause();
-                    var task = Task.Run(async () =>
-                    {
-                        await AsyncGPUReadback.RequestIntoNativeArrayAsync(ref buffer, texture);
-                        var image = Convert.ToBase64String(buffer.AsReadOnlySpan());
-                        pictures.Enqueue(new() { Width = width, Height = height, Data = image });
-                    });
-                    // TODO: Flash!
-                    while (!task.IsCompleted) yield return null;
+                    var request = AsyncGPUReadback.RequestIntoNativeArray(ref buffer, texture);
+                    while (!request.done) yield return null;
+
+                    var data = Convert.ToBase64String(buffer.AsReadOnlySpan());
+                    pictures.Enqueue(new() { Width = width, Height = height, Data = data });
                     Camera.Preview.enabled = false;
                 }
                 else
@@ -207,17 +264,16 @@ public sealed class Comfy : MonoBehaviour
             {
                 if (frames.TryDequeue(out var frame))
                 {
-                    while (Time.time - time < delta / speed) yield return null;
-                    time += delta / speed;
+                    while (Time.time - time < delta.wait / delta.speed) yield return null;
+                    time += delta.wait / delta.speed;
 
                     if (load == null || load.width != frame.Width || load.height != frame.Height)
                         load = new Texture2D(frame.Width, frame.Height, GraphicsFormat.R8G8B8_UNorm, TextureCreationFlags.DontInitializePixels);
 
-                    load.LoadRawTextureData(frame.Data);
-                    load.Apply();
+                    Load(memory, frame, load);
                     Output.material.mainTexture = load;
                     (main, load) = (load, main);
-                    resolutions.current = (frame.Width, frame.Height);
+                    resolutions = (frame.Width, frame.Height);
                 }
                 else time = (double)Time.time;
                 yield return null;
@@ -228,8 +284,13 @@ public sealed class Comfy : MonoBehaviour
         {
             while (true)
             {
-                if (deltas.Count > 0) delta = Mathf.Lerp(delta, deltas.Select(delta => (float)delta.TotalSeconds).Average(), Time.deltaTime);
-                if (frames.Count > 0) speed = Mathf.Lerp(speed, Mathf.Clamp(frames.Count / (5f / delta), 0.75f, 1.5f), Time.deltaTime);
+                delta.image = deltas.images.Select(delta => (float)delta.TotalSeconds).Average();
+                delta.batch = deltas.batches.Select(delta => (float)delta.TotalMinutes).Average();
+                delta.wait = Mathf.Lerp(delta.wait, delta.image, Time.deltaTime);
+
+                var rate = 10f / delta.wait;
+                var ratio = Mathf.Pow(Mathf.Clamp01(frames.Count / rate), 2f);
+                delta.speed = Mathf.Lerp(delta.speed, 0.75f + ratio / 2f, Time.deltaTime);
                 yield return null;
             }
         }
@@ -243,11 +304,13 @@ public sealed class Comfy : MonoBehaviour
                 if (show)
                 {
                     Debug.text = $@"
-Rate: {1f / delta:00.00}
-Delta: {delta:0.0000}
-Speed: {speed:0.0000}
-Frames: {frames.Count:000}
-Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolutions.current == resolutions.next ? $"" : $"-> {resolutions.next.width}x{resolutions.next.height}")}";
+Images Per Second: {1f / delta.image:00.000}
+Batches Per Minute: {1f / delta.batch:00.000}
+Rate: {delta.speed / delta.wait:00.000}
+Wait: {delta.wait:0.0000}
+Speed: {delta.speed:0.0000}
+Frames: {frames.Count:0000}
+Resolution: {resolutions.width}x{resolutions.height}";
                 }
                 else
                     Debug.text = "";
@@ -257,23 +320,19 @@ Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolution
 
         IEnumerator UpdateState()
         {
-            // var old = default((int, int, int, int, int, int, int));
-            var first = true;
             var (width, height) = _resolutions.Last();
             var template = new State()
             {
                 Width = width,
                 Height = height,
-                Zoom = 32
+                Cache = Application.isEditor ? "" : "/input/.cache",
+                Positive = "(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.",
+                Negative = "(nude, naked, child, children, blurry, worst quality, low detail, monochrome, simple, centered)",
+                Zoom = 64
             };
             while (true)
             {
-                if (first.Take())
-                {
-                    var task = WriteInput(version => template with { Version = version });
-                    while (!task.IsCompleted) yield return null;
-                }
-                else if (pictures.TryDequeue(out var picture))
+                if (pictures.TryDequeue(out var picture))
                 {
                     var task = WriteInput(version => template with
                     {
@@ -283,7 +342,7 @@ Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolution
                         Image = picture.Data,
                         Next = template with { Version = version },
                     });
-                    while (!task.IsCompleted) yield return null;
+                    foreach (var item in Wait(task)) yield return item;
                 }
                 else if (_inputs.Left.Take())
                 {
@@ -298,7 +357,7 @@ Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolution
                             Stop = true,
                             Next = state
                         }));
-                    while (!task.IsCompleted) yield return null;
+                    foreach (var item in Wait(task)) yield return item;
                 }
                 else yield return null;
             }
@@ -308,7 +367,6 @@ Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolution
         {
             var version = Interlocked.Increment(ref _version);
             var state = get(version);
-            resolutions.next = (state.Width, state.Height);
             await input.WriteLineAsync($"{state}");
             await input.FlushAsync();
         }
@@ -342,25 +400,45 @@ Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolution
 
         async Task ReadOutput()
         {
-            var then = watch.Elapsed;
+            var then = (image: watch.Elapsed, batch: watch.Elapsed);
             while (!process.HasExited)
             {
                 var line = await output.ReadLineAsync();
+                if (string.IsNullOrWhiteSpace(line)) continue;
                 try
                 {
                     var splits = line.Split(",");
-                    var frame = new Frame
+                    var version = int.Parse(splits[0]);
+                    var loop = int.Parse(splits[1]);
+                    var width = int.Parse(splits[2]);
+                    var height = int.Parse(splits[3]);
+                    var count = int.Parse(splits[4]);
+                    var offset = int.Parse(splits[5]);
+                    var size = int.Parse(splits[6]) / count;
+                    UnityEngine.Debug.Log($"Received batch: {{ Version = {version}, Loop = {loop}, Count = {count}, Width = {width}, Height = {height}, Offset = {offset}, Size = {size} }}");
+                    for (int i = 0; i < count; i++, offset += size)
                     {
-                        Version = int.Parse(splits[0]),
-                        Width = int.Parse(splits[1]),
-                        Height = int.Parse(splits[2]),
-                        Data = Convert.FromBase64String(splits[3])
-                    };
-                    var now = watch.Elapsed;
-                    frames.Enqueue(frame);
-                    deltas.Enqueue(now - then);
-                    then = now;
-                    while (deltas.Count > 250) deltas.TryDequeue(out _);
+                        frames.Enqueue(new Frame
+                        {
+                            Version = version,
+                            Loop = loop,
+                            Index = i,
+                            Count = count,
+                            Width = width,
+                            Height = height,
+                            Offset = offset,
+                            Size = size,
+                        });
+
+                        var now = watch.Elapsed;
+                        if (deltas.images.TryDequeue(out _)) deltas.images.Enqueue(now - then.image);
+                        then.image = now;
+                    }
+                    {
+                        var now = watch.Elapsed;
+                        if (deltas.batches.TryDequeue(out _)) deltas.batches.Enqueue(now - then.batch);
+                        then.batch = now;
+                    }
                 }
                 catch (FormatException) { UnityEngine.Debug.Log(line); }
                 catch (IndexOutOfRangeException) { UnityEngine.Debug.Log(line); }
@@ -370,12 +448,18 @@ Resolution: {resolutions.current.width}x{resolutions.current.height}{(resolution
 
         async Task ReadError()
         {
-            while (!process.HasExited) UnityEngine.Debug.Log(await error.ReadLineAsync());
+            while (!process.HasExited)
+            {
+                var line = await error.ReadLineAsync();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                UnityEngine.Debug.Log(line);
+            }
         }
     }
 
     void Update()
     {
+        Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
         _inputs.Left |= Input.GetKeyDown(KeyCode.LeftArrow);
         _inputs.Right |= Input.GetKeyDown(KeyCode.RightArrow);
         _inputs.Up |= Input.GetKeyDown(KeyCode.UpArrow);

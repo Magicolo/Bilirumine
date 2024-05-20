@@ -1,4 +1,4 @@
-import random, sys, ast, threading, torch, base64, asyncio, numpy, os, pickle
+import random, sys, ast, threading, torch, base64, asyncio, numpy, os, pickle, traceback, mmap
 from queue import SimpleQueue
 
 sys.path.append("/comfy")
@@ -44,6 +44,22 @@ def error(message):
         sys.stderr.flush()
 
 
+def encode(image):
+    image = image.numpy().flatten()
+    image = numpy.clip(image * 255.0, 0, 255).astype(numpy.uint8)
+    image = base64.b64encode(image.tobytes()).decode("utf-8")
+    return image
+
+
+def decode(image, width, height):
+    image = base64.b64decode(image)
+    image = numpy.frombuffer(image, dtype=numpy.uint8)
+    image = image.astype(numpy.float32) / 255.0
+    image = image.reshape(1, height, width, 4)
+    image = torch.tensor(image[:, :, :, 1:])
+    return image
+
+
 def clipped(name, prompt, clip, cache):
     def encode(prompt, clip):
         with torch.inference_mode():
@@ -51,27 +67,22 @@ def clipped(name, prompt, clip, cache):
             (encoded,) = encoder.encode(text=prompt, clip=clip)
             return encoded
 
-    folder = os.path.dirname(os.path.realpath(__file__))
-    folder = f"{folder}/.cache"
-    path = f"{folder}/{name}_{hash(prompt)}.clip"
-
-    with CLIP_LOCK:
-        if path in CLIPS:
-            return CLIPS[path]
-
-    if os.path.exists(path):
-        with open(path, "rb") as file:
-            return pickle.load(file)
-
-    encoded = encode(prompt, clip)
-
-    if cache == "disk":
-        os.makedirs(folder, exist_ok=True)
+    name = f"{name}-{hash(prompt)}.clip"
+    if cache:
+        path = os.path.join(cache, name)
+        if os.path.exists(path):
+            with open(path, "rb") as file:
+                return pickle.load(file)
+        encoded = encode(prompt, clip)
         with open(path, "wb") as file:
             pickle.dump(encoded, file)
-    elif cache == "memory":
+    else:
         with CLIP_LOCK:
-            CLIPS[path] = encoded
+            if name in CLIPS:
+                return CLIPS[name]
+        encoded = encode(prompt, clip)
+        with CLIP_LOCK:
+            CLIPS[name] = encoded
 
     return encoded
 
@@ -89,16 +100,14 @@ def read(send):
     with torch.inference_mode():
         while True:
             try:
-                state = ast.literal_eval(input())
+                state = {**ast.literal_eval(input()), "loop": 0}
                 BREAK = max(BREAK, state["version"])
-                if state["stop"]:
-                    STOP = max(STOP, state["version"])
-                if state["image"] is not None:
-                    image = base64.b64decode(state["image"])
-                    image = numpy.frombuffer(image, dtype=numpy.uint8)
-                    image = image.astype(numpy.float32) / 255.0
-                    image = image.reshape(1, state["height"], state["width"], 3)
-                    image = torch.tensor(image)
+                STOP = max(STOP, state["version"] * state["stop"])
+
+                if state["skip"]:
+                    continue
+                elif state["image"]:
+                    image = decode(state["image"], state["width"], state["height"])
                 elif IMAGE is None:
                     (image,) = EmptyImage().generate(
                         state["width"], state["height"], 1, 0
@@ -106,8 +115,8 @@ def read(send):
                 else:
                     image = IMAGE
                 send.put((state, image), block=False)
-            except Exception as exception:
-                error(exception)
+            except:
+                error(traceback.format_exc())
 
 
 def extend(receive: SimpleQueue, send: SimpleQueue):
@@ -185,8 +194,8 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
                 (state, loaded) = receive.get(block=True)
                 (scaled, zoomed) = iterate(state, steps(state, loaded))
                 send.put((state, scaled, zoomed), block=False)
-            except Exception as exception:
-                error(exception)
+            except:
+                error(traceback.format_exc())
 
 
 def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
@@ -231,12 +240,11 @@ def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
                 (batched, decoded) = iterate(state, steps(state, scaled, zoomed))
                 send.put((state, batched), block=False)
                 if state["version"] >= BREAK:
-                    if state["next"] is None:
-                        loop.put((state, decoded), block=False)
-                    else:
-                        loop.put((state["next"], decoded), block=False)
-            except Exception as exception:
-                error(exception)
+                    next = state if state["next"] is None else state["next"]
+                    next = {**next, "loop": state["loop"] + 1}
+                    loop.put((next, decoded), block=False)
+            except:
+                error(traceback.format_exc())
 
 
 def interpolate(receive: SimpleQueue, send: SimpleQueue):
@@ -247,52 +255,67 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
             ckpt_name="rife49.pth",
             frames=batched,
             clear_cache_after_n_frames=100,
-            multiplier=5,
+            multiplier=6,
             fast_mode=True,
             ensemble=True,
             scale_factor=0.25,
         )
         yield None
-        (interpolated,) = interpolator.vfi(
+        (images,) = interpolator.vfi(
             ckpt_name="rife49.pth",
             frames=interpolated,
             clear_cache_after_n_frames=100,
-            multiplier=15,
+            multiplier=9,
             fast_mode=True,
             ensemble=True,
             scale_factor=1,
         )
-        yield interpolated
+        yield images
 
     with torch.inference_mode():
         interpolator = NODE_CLASS_MAPPINGS["RIFE VFI"]()
         while True:
             try:
                 (state, batched) = receive.get(block=True)
-                interpolated = iterate(state, steps(state, batched))
-                send.put((state, interpolated), block=False)
-            except Exception as exception:
-                error(exception)
-
+                images = iterate(state, steps(state, batched))
+                send.put((state, images), block=False)
+            except:
+                error(traceback.format_exc())
 
 def write(receive: SimpleQueue):
     global IMAGE
 
-    with torch.inference_mode():
-        while True:
-            try:
-                (state, interpolated) = receive.get(block=True)
-                images, IMAGE = (interpolated[:-1], interpolated[-1:])
-                for image in images:
-                    image = image.numpy().flatten()
-                    image = numpy.clip(image * 255.0, 0, 255).astype(numpy.uint8)
-                    image = base64.b64encode(image.tobytes()).decode("utf-8")
-                    output(
-                        f'{state["version"]},{state["width"]},{state["height"]},{image}'
-                    )
-                torch.cuda.empty_cache()
-            except Exception as exception:
-                error(exception)
+    with open("/dev/shm/bilirumine", "r+b") as file:
+        capacity = 1024 * 1024 * 1024
+        next = 0
+        with mmap.mmap(file.fileno(), capacity) as memory:
+            with torch.inference_mode():
+                while True:
+                    try:
+                        (state, images) = receive.get(block=True)
+                        images, IMAGE = images[:-1], images[-1:]
+                        [count, height, width, _] = images.shape
+                        images = images * 255.0
+                        images = images.clamp(0.0, 255.0)
+                        images = images.to(dtype=torch.uint8)
+                        images = images.numpy()
+                        data = images.tobytes()
+                        size = len(data)
+
+                        if next + size > capacity:
+                            offset, next = 0, 0
+                        else:
+                            offset = next
+
+                        next += size
+                        memory.seek(offset)
+                        memory.write(data)
+                        output(
+                            f'{state["version"]},{state["loop"]},{width},{height},{count},{offset},{size}'
+                        )
+                        torch.cuda.empty_cache()
+                    except:
+                        error(traceback.format_exc())
 
 IMAGE = None
 STOP = 0
