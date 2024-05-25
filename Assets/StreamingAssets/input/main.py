@@ -9,6 +9,7 @@ from nodes import (
     CheckpointLoaderSimple,
     KSampler,
     NODE_CLASS_MAPPINGS,
+    LoadImage,
     VAEEncode,
     EmptyImage,
     ImageScale,
@@ -98,22 +99,23 @@ def read(send):
     global IMAGE, STOP, BREAK
 
     with torch.inference_mode():
+        load = LoadImage()
+        empty = EmptyImage()
         while True:
             try:
                 state = {**ast.literal_eval(input()), "loop": 0}
-                BREAK = max(BREAK, state["version"])
+                BREAK = max(BREAK, state["version"] * state["break"])
                 STOP = max(STOP, state["version"] * state["stop"])
 
-                if state["skip"]:
-                    continue
-                elif state["image"]:
+                if state["image"]:
                     image = decode(state["image"], state["width"], state["height"])
-                elif IMAGE is None:
-                    (image,) = EmptyImage().generate(
-                        state["width"], state["height"], 1, 0
-                    )
+                elif state["load"]:
+                    (image, _) = load.load_image(state["load"])
+                elif state["empty"]:
+                    (image,) = empty.generate(state["width"], state["height"], 1, 0)
                 else:
                     image = IMAGE
+
                 send.put((state, image), block=False)
             except:
                 error(traceback.format_exc())
@@ -128,19 +130,23 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
         top = nudge(state["top"], 0.25)
         right = nudge(state["right"], 0.25)
         bottom = nudge(state["bottom"], 0.25)
-        yield None
+        zoom = nudge(state["zoom"], 0.25)
         (scaled,) = scaler.upscale(
             loaded, "nearest-exact", state["width"], state["height"], "disabled"
         )
-        yield None
-        (cropped,) = cropper.crop(
-            width=state["width"] - state["zoom"] * 2 - left - right,
-            height=state["height"] - state["zoom"] * 2 - top - bottom,
-            x=state["zoom"] + right,
-            y=state["zoom"] + bottom,
-            image=scaled,
-        )
-        yield None
+
+        if zoom > 0 or left > 0 or top > 0 or right > 0 or bottom > 0:
+            (cropped,) = cropper.crop(
+                width=state["width"] - zoom * 2 - left - right,
+                height=state["height"] - zoom * 2 - top - bottom,
+                x=zoom + right,
+                y=zoom + bottom,
+                image=scaled,
+            )
+            yield None
+        else:
+            cropped = scaled
+
         if left > 0 or top > 0 or right > 0 or bottom > 0:
             (padded, mask) = padder.expand_image(
                 cropped,
@@ -174,9 +180,15 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
             yield None
         else:
             decoded = cropped
-        (zoomed,) = scaler.upscale(
-            decoded, "nearest-exact", state["width"], state["height"], "disabled"
-        )
+
+        if zoom > 0:
+            (zoomed,) = scaler.upscale(
+                decoded, "nearest-exact", state["width"], state["height"], "disabled"
+            )
+            yield None
+        else:
+            zoomed = decoded
+
         yield (scaled, zoomed)
 
     with torch.inference_mode():
@@ -198,7 +210,9 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
                 error(traceback.format_exc())
 
 
-def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
+def detail(
+    receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue, end: SimpleQueue
+):
 
     def steps(state: dict, scaled, zoomed):
         yield None
@@ -210,11 +224,11 @@ def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
         yield None
         (sampled,) = sampler.sample(
             seed=seed(),
-            steps=5,
-            cfg=2.5,
+            steps=state["steps"],
+            cfg=state["guidance"],
             sampler_name="euler_ancestral",
             scheduler="sgm_uniform",
-            denoise=0.55,
+            denoise=state["denoise"],
             model=model,
             positive=positive,
             negative=negative,
@@ -222,24 +236,26 @@ def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
         )
         yield None
         (decoded,) = decoder.decode(samples=sampled, vae=vae)
-        yield None
-        (batched,) = batcher.batch(scaled, decoded)
-        yield (batched, decoded)
+        yield decoded
 
     with torch.inference_mode():
         encoder = VAEEncode()
         decoder = VAEDecode()
         sampler = KSampler()
-        batcher = ImageBatch()
         (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
             "dreamshaperXL_v21TurboDPMSDE.safetensors"
         )
         while True:
             try:
                 (state, scaled, zoomed) = receive.get(block=True)
-                (batched, decoded) = iterate(state, steps(state, scaled, zoomed))
-                send.put((state, batched), block=False)
-                if state["version"] >= BREAK:
+                decoded = iterate(state, steps(state, scaled, zoomed))
+
+                if state["full"]:
+                    send.put((state, scaled, decoded), block=False)
+                else:
+                    end.put((state, decoded), block=False)
+
+                if state["version"] >= BREAK and state["loop"] < state["loops"]:
                     next = state if state["next"] is None else state["next"]
                     next = {**next, "loop": state["loop"] + 1}
                     loop.put((next, decoded), block=False)
@@ -248,8 +264,11 @@ def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
 
 
 def interpolate(receive: SimpleQueue, send: SimpleQueue):
+    global IMAGE
 
-    def steps(state, batched):
+    def steps(state, scaled, decoded):
+        yield None
+        (batched,) = batcher.batch(scaled, decoded)
         yield None
         (interpolated,) = interpolator.vfi(
             ckpt_name="rife49.pth",
@@ -273,19 +292,19 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
         yield images
 
     with torch.inference_mode():
+        batcher = ImageBatch()
         interpolator = NODE_CLASS_MAPPINGS["RIFE VFI"]()
         while True:
             try:
-                (state, batched) = receive.get(block=True)
-                images = iterate(state, steps(state, batched))
+                (state, scaled, decoded) = receive.get(block=True)
+                images = iterate(state, steps(state, scaled, decoded))
+                images, IMAGE = images[1:], images[-1:]
                 send.put((state, images), block=False)
             except:
                 error(traceback.format_exc())
 
 
 def write(receive: SimpleQueue):
-    global IMAGE
-
     with open("/dev/shm/bilirumine", "r+b") as file:
         capacity = 1024 * 1024 * 1024
         next = 0
@@ -294,7 +313,6 @@ def write(receive: SimpleQueue):
                 while True:
                     try:
                         (state, images) = receive.get(block=True)
-                        images, IMAGE = images[:-1], images[-1:]
                         [count, height, width, _] = images.shape
                         images = images * 255.0
                         images = images.clamp(0.0, 255.0)
@@ -312,7 +330,7 @@ def write(receive: SimpleQueue):
                         memory.seek(offset)
                         memory.write(data)
                         output(
-                            f'{state["version"]},{state["loop"]},{width},{height},{count},{offset},{size}'
+                            f'{state["version"]},{state["loop"]},{state["tags"]},{width},{height},{count},{offset},{size}'
                         )
                         torch.cuda.empty_cache()
                     except:
@@ -339,7 +357,7 @@ d = SimpleQueue()
 threads = [
     threading.Thread(target=read, args=(a,)),
     threading.Thread(target=extend, args=(a, b)),
-    threading.Thread(target=detail, args=(b, c, a)),
+    threading.Thread(target=detail, args=(b, c, a, d)),
     threading.Thread(target=interpolate, args=(c, d)),
     threading.Thread(target=write, args=(d,)),
 ]

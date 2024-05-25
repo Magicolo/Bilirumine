@@ -5,7 +5,6 @@ using UnityEngine;
 using System.IO;
 using System;
 using System.Collections.Concurrent;
-using UnityEngine.Experimental.Rendering;
 using System.Collections;
 using System.Threading.Tasks;
 using TMPro;
@@ -17,6 +16,8 @@ using UnityEngine.UI;
 using System.IO.MemoryMappedFiles;
 using System.Collections.Generic;
 using Debug = UnityEngine.Debug;
+using System.Net.Http;
+using System.Text;
 
 public sealed class Main : MonoBehaviour
 {
@@ -37,10 +38,11 @@ public sealed class Main : MonoBehaviour
         public bool _4;
     }
 
-    record State
+    sealed record State
     {
         public int Version;
-        public int Batch;
+        public int Loops;
+        public Tags Tags;
         public int Width;
         public int Height;
         public int Left;
@@ -48,16 +50,50 @@ public sealed class Main : MonoBehaviour
         public int Bottom;
         public int Top;
         public int Zoom;
-        public bool Skip;
+        public int Steps;
+        public float Guidance;
+        public float Denoise;
+        public bool Full;
+        public bool Break;
         public bool Stop;
-        public string Cache = "";
-        public string Positive = "";
-        public string Negative = "";
-        public string Image = "";
+        public bool Empty;
+        public string? Load;
+        public string? Cache;
+        public string? Positive;
+        public string? Negative;
+        public string? Image;
         public State? Next;
 
         public override string ToString() =>
-            $@"{{""version"":{Version},""width"":{Width},""height"":{Height},""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""cache"":""{Cache}"",""stop"":{(Stop ? "True" : "False")},""skip"":{(Skip ? "True" : "False")},""positive"":""{Positive}"",""negative"":""{Negative}"",""image"":""{Image}"",""next"":{Next?.ToString() ?? "None"}}}";
+            $@"{{""version"":{Version},""loops"":{Loops},""tags"":{(int)Tags},""width"":{Width},""height"":{Height},""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""steps"":{Steps},""guidance"":{Guidance},""denoise"":{Denoise},""cache"":""{Cache}"",""full"":{(Full ? "True" : "False")},""break"":{(Break ? "True" : "False")},""stop"":{(Stop ? "True" : "False")},""empty"":{(Empty ? "True" : "False")},""positive"":""{Positive}"",""negative"":""{Negative}"",""load"":""{Load}"",""image"":""{Image}"",""next"":{Next?.ToString() ?? "None"}}}";
+    }
+
+    [Serializable]
+    sealed record Word
+    {
+        public string Model => model;
+        public string CreatedAt => created_at;
+        public string Response => response;
+        public bool Done => done;
+        public string? DoneReason => done_reason;
+        public int[]? Context => context;
+        public long? TotalDuration => total_duration;
+        public long? LoadDuration => load_duration;
+        public long? PromptEvalDuration => prompt_eval_duration;
+        public int? EvalCount => eval_count;
+        public long? EvalDuration => eval_duration;
+
+        [SerializeField] string model = default!;
+        [SerializeField] string created_at = default!;
+        [SerializeField] string response = default!;
+        [SerializeField] bool done;
+        [SerializeField] string? done_reason;
+        [SerializeField] int[]? context;
+        [SerializeField] long? total_duration;
+        [SerializeField] long? load_duration;
+        [SerializeField] long? prompt_eval_duration;
+        [SerializeField] int? eval_count;
+        [SerializeField] long? eval_duration;
     }
 
     struct Picture
@@ -77,48 +113,70 @@ public sealed class Main : MonoBehaviour
         public int Height;
         public int Offset;
         public int Size;
+        public Tags Tags;
     }
 
-    [Serializable]
-    public sealed class CameraSettings
+    struct Icon
     {
-        public int X = 128;
-        public int Y = 128;
-        public int Rate = 30;
-        public int Device = 0;
-        public bool Flip;
-        public Renderer Preview = default!;
-        public Camera Camera = default!;
-        public WebCamTexture Texture = default!;
-
-        public IEnumerable Initialize()
-        {
-            Debug.Log($"Camera devices: {string.Join(", ", WebCamTexture.devices.Select(device => $"{device.name}: [{string.Join(", ", device.availableResolutions ?? Array.Empty<Resolution>())}]"))}");
-            if (!WebCamTexture.devices.TryAt(Device, out var device))
-            {
-                Debug.LogWarning("Camera not found.");
-                yield break;
-            }
-
-            Texture = new WebCamTexture(device.name, X, Y, Rate)
-            {
-                autoFocusPoint = null,
-                filterMode = FilterMode.Point,
-                wrapMode = TextureWrapMode.Clamp,
-            };
-            Texture.Play();
-            Application.quitting += () => { try { Texture.Stop(); } catch { } };
-            while (Texture.width < 32 && Texture.height < 32) yield return null;
-            Debug.Log($"Camera: {Texture.deviceName} | Resolution: {Texture.width}x{Texture.height} | FPS: {Texture.requestedFPS} | Graphics: {Texture.graphicsFormat}");
-            Preview.material.mainTexture = Texture;
-
-            var scale = Preview.transform.localScale;
-            scale.y = (Flip, scale.y) switch { (true, > 0f) or (false, < 0f) => -scale.y, _ => scale.y };
-            Preview.transform.localScale = scale;
-            Preview.enabled = false;
-            Texture.Pause();
-        }
+        public int Version;
+        public int Width;
+        public int Height;
+        public int Offset;
+        public int Size;
+        public Tags Tags;
     }
+
+    [Flags]
+    enum Tags
+    {
+        Frame = 1 << 0,
+        Icon = 1 << 1,
+        Left = 1 << 2,
+        Right = 1 << 3,
+        Up = 1 << 4,
+        Down = 1 << 5,
+    }
+
+    // [Serializable]
+    // public sealed class CameraSettings
+    // {
+    //     public int X = 128;
+    //     public int Y = 128;
+    //     public int Rate = 30;
+    //     public int Device = 0;
+    //     public bool Flip;
+    //     public Renderer Preview = default!;
+    //     public Camera Camera = default!;
+    //     public WebCamTexture Texture = default!;
+
+    //     public IEnumerable Initialize()
+    //     {
+    //         Debug.Log($"Camera devices: {string.Join(", ", WebCamTexture.devices.Select(device => $"{device.name}: [{string.Join(", ", device.availableResolutions ?? Array.Empty<Resolution>())}]"))}");
+    //         if (!WebCamTexture.devices.TryAt(Device, out var device))
+    //         {
+    //             Debug.LogWarning("Camera not found.");
+    //             yield break;
+    //         }
+
+    //         Texture = new WebCamTexture(device.name, X, Y, Rate)
+    //         {
+    //             autoFocusPoint = null,
+    //             filterMode = FilterMode.Point,
+    //             wrapMode = TextureWrapMode.Clamp,
+    //         };
+    //         Texture.Play();
+    //         Application.quitting += () => { try { Texture.Stop(); } catch { } };
+    //         while (Texture.width < 32 && Texture.height < 32) yield return null;
+    //         Debug.Log($"Camera: {Texture.deviceName} | Resolution: {Texture.width}x{Texture.height} | FPS: {Texture.requestedFPS} | Graphics: {Texture.graphicsFormat}");
+    //         Preview.material.mainTexture = Texture;
+
+    //         var scale = Preview.transform.localScale;
+    //         scale.y = (Flip, scale.y) switch { (true, > 0f) or (false, < 0f) => -scale.y, _ => scale.y };
+    //         Preview.transform.localScale = scale;
+    //         Preview.enabled = false;
+    //         Texture.Pause();
+    //     }
+    // }
 
     static MemoryMappedFile Memory()
     {
@@ -146,6 +204,7 @@ public sealed class Main : MonoBehaviour
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
         });
         Application.quitting += () => { try { process.Close(); } catch { } };
         Application.quitting += () => { try { process.Kill(); } catch { } };
@@ -165,25 +224,43 @@ public sealed class Main : MonoBehaviour
     static Process Docker(string service)
     {
         var path = Path.Join(Application.streamingAssetsPath, "docker-compose.yml");
-        var process = Run(service.ToUpper(), "docker", $"compose --file '{path}' run --interactive --rm {service}");
+        var process = Run(service.ToUpper(), "docker", $"compose --file '{path}' run --service-ports --interactive --rm {service}");
         Application.quitting += () => { try { Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill {service}")); } catch { } };
         return process;
     }
 
-    static async IAsyncEnumerable<string> Ollama(string prompt)
+    static (Process process, HttpClient client) Ollama()
     {
-        var path = Path.Join(Application.streamingAssetsPath, "docker-compose.yml");
-        using var process = Run("OLLAMA", "docker", $"compose --file '{path}' exec ollama run llava-llama3 '{prompt}'");
-        var buffer = new char[256];
-        while (!process.HasExited)
+        var process = Docker("ollama");
+        var client = new HttpClient() { BaseAddress = new("http://localhost:11432/") };
+        return (process, client);
+    }
+
+    static async IAsyncEnumerable<Word> Generate(HttpClient client, string prompt, byte[] image)
+    {
+        Debug.Log($"OLLAMA: Generating with prompt '{prompt}' and image of size '{image.Length}'.");
+        var encoded = Convert.ToBase64String(image);
+        var content = new StringContent($@"{{""model"":""llava-llama3"",""prompt"":""{prompt}"",""images"":[""{encoded}""],""stream"":true}}", Encoding.UTF8, "application/json");
+        var request = new HttpRequestMessage(HttpMethod.Post, "api/generate") { Content = content };
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+        using var stream = await response.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(stream);
+        while (!reader.EndOfStream)
         {
-            var count = await process.StandardOutput.ReadAsync(buffer);
-            yield return new string(buffer, 0, count);
+            var line = await reader.ReadLineAsync();
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var word = JsonUtility.FromJson<Word>(line);
+            yield return word;
+            if (word.Done) break;
         }
     }
 
-    static void Load(MemoryMappedFile memory, Frame frame, Texture2D target)
+    static bool Load(MemoryMappedFile memory, int width, int height, int offset, int size, ref Texture2D? texture)
     {
+        if (texture == null || texture.width != width || texture.height != height)
+            texture = new Texture2D(width, height, TextureFormat.RGB24, 1, true, true);
+
         using (var access = memory.CreateViewAccessor())
         {
             unsafe
@@ -195,15 +272,16 @@ public sealed class Main : MonoBehaviour
                     if (pointer == null)
                     {
                         Debug.LogError("Failed to acquire pointer to shared memory.");
-                        return;
+                        return false;
                     }
-                    var source = (IntPtr)(pointer + frame.Offset);
-                    target.LoadRawTextureData(source, frame.Size);
+                    var source = (IntPtr)(pointer + offset);
+                    texture.LoadRawTextureData(source, size);
                 }
                 finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
             }
         }
-        target.Apply();
+        texture.Apply();
+        return true;
     }
 
     static NativeArray<byte> Buffer(int width, int height)
@@ -219,6 +297,8 @@ public sealed class Main : MonoBehaviour
         while (!task.IsCompleted) yield return null;
         if (task is { Exception: { } exception }) throw exception;
     }
+
+    static IEnumerable Wait(params Task[] tasks) => Wait(Task.WhenAll(tasks));
 
     static IEnumerable Wait(ValueTask task)
     {
@@ -238,7 +318,7 @@ public sealed class Main : MonoBehaviour
             var move = enumerator.MoveNextAsync();
             foreach (var _ in Wait(move)) yield return null;
             if (move.Result) yield return enumerator.Current;
-            else break;
+            else yield break;
         }
     }
 
@@ -251,7 +331,13 @@ public sealed class Main : MonoBehaviour
 
     static int _version = 0;
 
-    public CameraSettings Camera = new();
+    public string Prompt = "Melting Train";
+
+    // public CameraSettings Camera = new();
+    public Image Left = default!;
+    public Image Right = default!;
+    public Image Up = default!;
+    public Image Down = default!;
     public Image Flash = default!;
     public Renderer Output = default!;
     public TMP_Text Statistics = default!;
@@ -263,8 +349,11 @@ public sealed class Main : MonoBehaviour
         var cache = Cache();
         using var memory = Memory();
         using var comfy = Docker("comfy");
-        using var ollama = Docker("ollama");
-        foreach (var item in Camera.Initialize()) yield return item;
+        var ollama = Ollama();
+        using var __ = ollama.process;
+        using var ___ = ollama.client;
+
+        // foreach (var item in Camera.Initialize()) yield return item;
 
         var resolutions = (width: 0, height: 0);
         var watch = Stopwatch.StartNew();
@@ -273,14 +362,16 @@ public sealed class Main : MonoBehaviour
             images: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta.image))),
             batches: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 5).Select(_ => TimeSpan.FromSeconds(delta.batch))));
         var frames = new ConcurrentQueue<Frame>();
-        var pictures = new ConcurrentQueue<Picture>();
-        StartCoroutine(UpdateCamera());
-        StartCoroutine(UpdateTexture());
+        var icons = new ConcurrentQueue<Icon>();
+        // var pictures = new ConcurrentQueue<Picture>();
+        // StartCoroutine(UpdateCamera());
+        StartCoroutine(UpdateFrames());
+        StartCoroutine(UpdateIcons());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateInput());
         StartCoroutine(UpdateDebug());
-        StartCoroutine(UpdatePrompt());
+        // StartCoroutine(UpdatePrompt());
 
         foreach (var item in Wait(ReadOutput()))
         {
@@ -288,57 +379,72 @@ public sealed class Main : MonoBehaviour
             yield return item;
         }
 
-        IEnumerator UpdatePrompt()
-        {
-            while (true)
-            {
-                if (_inputs.Space.Take())
-                {
-                    foreach (var item in Wait(Ollama("Write 10 random words.")))
-                    {
-                        if (item is null) yield return null;
-                        else Debug.Log(item);
-                    }
-                }
-                yield return null;
-            }
-        }
+        // IEnumerator UpdatePrompt()
+        // {
+        //     while (true)
+        //     {
+        //         // if (_inputs.Space.Take())
+        //         // {
+        //         //     Debug.Log($"GENERATE: Space");
+        //         //     var task = Generate("Write 10 random words.");
+        //         //     foreach (var item in Wait(Generate("Write 10 random words.")))
+        //         //     {
+        //         //         if (item is null) yield return item;
+        //         //         else Debug.Log($"GENERATE: {item}");
+        //         //     }
+        //         // }
+        //         yield return null;
+        //     }
+        // }
 
-        IEnumerator UpdateCamera()
-        {
-            var (width, height) = (Camera.Texture.width, Camera.Texture.height);
-            var buffer = Buffer(width, height);
-            while (true)
-            {
-                if (_inputs.Shift.Take())
-                {
-                    var task = WriteInput(version => new() { Version = version, Skip = true, Stop = true });
-                    Camera.Texture.Play();
-                    yield return null;
-                    Camera.Preview.enabled = true;
-                    foreach (var item in Wait(task)) yield return item;
-                }
-                else if (Camera.Preview.enabled)
-                {
-                    Flash.color = Flash.color.With(a: 1f);
-                    Camera.Texture.Pause();
-                    var request = AsyncGPUReadback.RequestIntoNativeArray(ref buffer, Camera.Texture);
-                    while (!request.done) yield return null;
+        // IEnumerator UpdateCamera()
+        // {
+        //     var (width, height) = (Camera.Texture.width, Camera.Texture.height);
+        //     var buffer = Buffer(width, height);
+        //     var texture = new Texture2D(width, height, TextureFormat.ARGB32, 1, true, true);
+        //     while (true)
+        //     {
+        //         if (_inputs.Shift.Take())
+        //         {
+        //             var task = WriteInput(version => new() { Version = version, Skip = true, Stop = true });
+        //             Camera.Texture.Play();
+        //             yield return null;
+        //             Camera.Preview.enabled = true;
+        //             foreach (var item in Wait(task)) yield return item;
+        //         }
+        //         else if (Camera.Preview.enabled)
+        //         {
+        //             Flash.color = Flash.color.With(a: 1f);
+        //             Camera.Texture.Pause();
+        //             var request = AsyncGPUReadback.RequestIntoNativeArray(ref buffer, Camera.Texture);
+        //             while (!request.done) yield return null;
 
-                    var data = Convert.ToBase64String(buffer.AsReadOnlySpan());
-                    pictures.Enqueue(new() { Width = width, Height = height, Data = data });
-                    Camera.Preview.enabled = false;
-                }
-                else
-                {
-                    Camera.Texture.Pause();
-                    Camera.Preview.enabled = false;
-                }
-                yield return null;
-            }
-        }
+        //             // texture.LoadRawTextureData(buffer);
+        //             // texture.Apply();
+        //             // Debug.Log($"OLLAMA: Generate with raw image '{buffer.Length}'.");
+        //             // var encoded = texture.EncodeToPNG();
+        //             // Debug.Log($"OLLAMA: Generate with encoded image '{encoded.Length}'.");
+        //             // var generate = Task.Run(async () =>
+        //             // {
+        //             //     await foreach (var item in Generate(ollama.client, "Describe the image.", encoded))
+        //             //         Debug.Log($"OLLAMA: Generated '{item}'.");
+        //             // });
 
-        IEnumerator UpdateTexture()
+        //             var data = Convert.ToBase64String(buffer.AsReadOnlySpan());
+        //             pictures.Enqueue(new() { Width = width, Height = height, Data = data });
+        //             Camera.Preview.enabled = false;
+        //             // foreach (var item in Wait(generate)) yield return item;
+        //         }
+        //         else
+        //         {
+        //             Camera.Texture.Pause();
+        //             Camera.Preview.enabled = false;
+        //         }
+        //         yield return null;
+        //     }
+        // }
+
+        IEnumerator UpdateFrames()
         {
             var time = (double)Time.time;
             var main = default(Texture2D);
@@ -349,16 +455,33 @@ public sealed class Main : MonoBehaviour
                 {
                     while (Time.time - time < delta.wait / delta.speed) yield return null;
                     time += delta.wait / delta.speed;
-
-                    if (load == null || load.width != frame.Width || load.height != frame.Height)
-                        load = new Texture2D(frame.Width, frame.Height, GraphicsFormat.R8G8B8_UNorm, TextureCreationFlags.DontInitializePixels);
-
-                    Load(memory, frame, load);
-                    Output.material.mainTexture = load;
+                    if (Load(memory, frame.Width, frame.Height, frame.Offset, frame.Size, ref load))
+                        Output.material.mainTexture = load;
                     (main, load) = (load, main);
                     resolutions = (frame.Width, frame.Height);
                 }
                 else time = (double)Time.time;
+                yield return null;
+            }
+        }
+
+        IEnumerator UpdateIcons()
+        {
+            var target = (left: default(Texture2D), right: default(Texture2D), up: default(Texture2D), down: default(Texture2D));
+            while (true)
+            {
+                if (icons.TryDequeue(out var icon))
+                {
+                    var area = new Rect(0f, 0f, icon.Width, icon.Height);
+                    if (icon.Tags.HasFlag(Tags.Left) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.left))
+                        Left.sprite = Sprite.Create(target.left, area, area.center);
+                    if (icon.Tags.HasFlag(Tags.Right) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.right))
+                        Right.sprite = Sprite.Create(target.right, area, area.center);
+                    if (icon.Tags.HasFlag(Tags.Up) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.up))
+                        Up.sprite = Sprite.Create(target.up, area, area.center);
+                    if (icon.Tags.HasFlag(Tags.Down) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.down))
+                        Down.sprite = Sprite.Create(target.down, area, area.center);
+                }
                 yield return null;
             }
         }
@@ -403,29 +526,57 @@ Resolution: {resolutions.width}x{resolutions.height}";
 
         IEnumerator UpdateState()
         {
-            var template = new State()
+            var initial = new State()
             {
+                Loops = int.MaxValue,
+                Tags = Tags.Frame,
                 Width = _resolutions.high.width,
                 Height = _resolutions.high.height,
-                Cache = Application.isEditor ? "" : "/input/.cache",
+                Zoom = 0,
+                Steps = 5,
+                Guidance = 2.5f,
+                Denoise = 0.55f,
                 Positive = "(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.",
-                Negative = "(nude, naked, child, children, blurry, worst quality, low detail, monochrome, simple, centered)",
-                Zoom = 64
+                Negative = "(nude, naked, nudity, youth, child, children, blurry, worst quality, low detail)",
+                Cache = Application.isEditor ? "" : "/input/.cache",
+                Full = true,
+                Break = true,
             };
+            foreach (var item in Wait(WriteInput(version => initial with { Version = version, Empty = true }))) yield return item;
+
             while (true)
             {
-                if (pictures.TryDequeue(out var picture))
+                if (_inputs.Space.Take())
                 {
-                    var task = WriteInput(version => template with
+                    var task = WriteInput(version => initial with
                     {
                         Version = version,
-                        Width = picture.Width,
-                        Height = picture.Height,
-                        Image = picture.Data,
-                        Next = template with { Version = version },
+                        Tags = Tags.Icon | Tags.Left | Tags.Right,
+                        Width = 256,
+                        Height = 256,
+                        Loops = 0,
+                        Steps = 6,
+                        Guidance = 3f,
+                        Denoise = 0.6f,
+                        Full = false,
+                        Break = false,
+                        Load = "purple.png",
+                        Positive = $"(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Simple minimalistic figurative app icon of {Prompt}",
                     });
                     foreach (var item in Wait(task)) yield return item;
                 }
+                // if (pictures.TryDequeue(out var picture))
+                // {
+                //     var task = WriteInput(version => template with
+                //     {
+                //         Version = version,
+                //         Width = picture.Width,
+                //         Height = picture.Height,
+                //         Image = picture.Data,
+                //         Next = template with { Version = version },
+                //     });
+                //     foreach (var item in Wait(task)) yield return item;
+                // }
 
                 var left = _inputs.Left.Take() ? 160 : 0;
                 var right = _inputs.Right.Take() ? 160 : 0;
@@ -434,8 +585,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 if (left > 0 || right > 0 || top > 0 || bottom > 0)
                 {
                     var task = WriteInput(version => new[] { _resolutions.medium, _resolutions.low, _resolutions.low, _resolutions.low, _resolutions.medium }.Aggregate(
-                        template with { Version = version, Stop = true },
-                        (state, resolution) => template with
+                        initial with { Version = version, Stop = true },
+                        (state, resolution) => initial with
                         {
                             Version = version,
                             Width = resolution.width,
@@ -444,7 +595,6 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Right = right,
                             Top = top,
                             Bottom = bottom,
-                            Zoom = 0,
                             Stop = true,
                             Next = state
                         }));
@@ -458,6 +608,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
         {
             var version = Interlocked.Increment(ref _version);
             var state = get(version);
+            Debug.Log($"COMFY: Sending input '{state}'.");
             await comfy.StandardInput.WriteLineAsync($"{state}");
             await comfy.StandardInput.FlushAsync();
         }
@@ -498,37 +649,54 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 try
                 {
-                    var splits = line.Split(",");
+                    var splits = line.Split(",", StringSplitOptions.None);
                     var version = int.Parse(splits[0]);
                     var loop = int.Parse(splits[1]);
-                    var width = int.Parse(splits[2]);
-                    var height = int.Parse(splits[3]);
-                    var count = int.Parse(splits[4]);
-                    var offset = int.Parse(splits[5]);
-                    var size = int.Parse(splits[6]) / count;
-                    Debug.Log($"Received batch: {{ Version = {version}, Loop = {loop}, Count = {count}, Width = {width}, Height = {height}, Offset = {offset}, Size = {size} }}");
-                    for (int i = 0; i < count; i++, offset += size)
+                    var tags = (Tags)int.Parse(splits[2]);
+                    var width = int.Parse(splits[3]);
+                    var height = int.Parse(splits[4]);
+                    var count = int.Parse(splits[5]);
+                    var offset = int.Parse(splits[6]);
+                    var size = int.Parse(splits[7]) / count;
+                    Debug.Log($"COMFY: Received output: {{ Version = {version}, Loop = {loop}, Tags = {tags}, Count = {count}, Width = {width}, Height = {height}, Offset = {offset}, Size = {size} }}");
+                    if (tags.HasFlag(Tags.Frame))
                     {
-                        frames.Enqueue(new Frame
+                        for (int i = 0; i < count; i++, offset += size)
+                        {
+                            frames.Enqueue(new Frame
+                            {
+                                Version = version,
+                                Loop = loop,
+                                Index = i,
+                                Count = count,
+                                Width = width,
+                                Height = height,
+                                Offset = offset,
+                                Size = size,
+                                Tags = tags,
+                            });
+
+                            var now = watch.Elapsed;
+                            if (deltas.images.TryDequeue(out _)) deltas.images.Enqueue(now - then.image);
+                            then.image = now;
+                        }
+                        {
+                            var now = watch.Elapsed;
+                            if (deltas.batches.TryDequeue(out _)) deltas.batches.Enqueue(now - then.batch);
+                            then.batch = now;
+                        }
+                    }
+                    if (tags.HasFlag(Tags.Icon))
+                    {
+                        icons.Enqueue(new Icon
                         {
                             Version = version,
-                            Loop = loop,
-                            Index = i,
-                            Count = count,
                             Width = width,
                             Height = height,
                             Offset = offset,
                             Size = size,
+                            Tags = tags,
                         });
-
-                        var now = watch.Elapsed;
-                        if (deltas.images.TryDequeue(out _)) deltas.images.Enqueue(now - then.image);
-                        then.image = now;
-                    }
-                    {
-                        var now = watch.Elapsed;
-                        if (deltas.batches.TryDequeue(out _)) deltas.batches.Enqueue(now - then.batch);
-                        then.batch = now;
                     }
                 }
                 catch (FormatException) { Debug.Log($"COMFY: {line}"); }
