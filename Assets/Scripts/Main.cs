@@ -9,7 +9,6 @@ using System.Collections;
 using System.Threading.Tasks;
 using TMPro;
 using System.Linq;
-using System.Threading;
 using UnityEngine.Rendering;
 using Unity.Collections;
 using UnityEngine.UI;
@@ -127,7 +126,7 @@ public sealed class Main : MonoBehaviour
     }
 
     [Flags]
-    enum Tags
+    public enum Tags
     {
         Frame = 1 << 0,
         Icon = 1 << 1,
@@ -334,10 +333,10 @@ public sealed class Main : MonoBehaviour
     public string Prompt = "Melting Train";
 
     // public CameraSettings Camera = new();
-    public Image Left = default!;
-    public Image Right = default!;
-    public Image Up = default!;
-    public Image Down = default!;
+    public global::Icon Left = default!;
+    public global::Icon Right = default!;
+    public global::Icon Up = default!;
+    public global::Icon Down = default!;
     public Image Flash = default!;
     public Renderer Output = default!;
     public TMP_Text Statistics = default!;
@@ -474,13 +473,13 @@ public sealed class Main : MonoBehaviour
                 {
                     var area = new Rect(0f, 0f, icon.Width, icon.Height);
                     if (icon.Tags.HasFlag(Tags.Left) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.left))
-                        Left.sprite = Sprite.Create(target.left, area, area.center);
+                        Left.Content.sprite = Sprite.Create(target.left, area, area.center);
                     if (icon.Tags.HasFlag(Tags.Right) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.right))
-                        Right.sprite = Sprite.Create(target.right, area, area.center);
+                        Right.Content.sprite = Sprite.Create(target.right, area, area.center);
                     if (icon.Tags.HasFlag(Tags.Up) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.up))
-                        Up.sprite = Sprite.Create(target.up, area, area.center);
+                        Up.Content.sprite = Sprite.Create(target.up, area, area.center);
                     if (icon.Tags.HasFlag(Tags.Down) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.down))
-                        Down.sprite = Sprite.Create(target.down, area, area.center);
+                        Down.Content.sprite = Sprite.Create(target.down, area, area.center);
                 }
                 yield return null;
             }
@@ -526,45 +525,45 @@ Resolution: {resolutions.width}x{resolutions.height}";
 
         IEnumerator UpdateState()
         {
-            var initial = new State()
+            var frame = new State()
             {
-                Loops = int.MaxValue,
                 Tags = Tags.Frame,
+                Cache = Application.isEditor ? null : "/input/.cache",
                 Width = _resolutions.high.width,
                 Height = _resolutions.high.height,
-                Zoom = 0,
+                Loops = int.MaxValue,
                 Steps = 5,
                 Guidance = 2.5f,
                 Denoise = 0.55f,
                 Positive = "(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.",
                 Negative = "(nude, naked, nudity, youth, child, children, blurry, worst quality, low detail)",
-                Cache = Application.isEditor ? "" : "/input/.cache",
                 Full = true,
                 Break = true,
             };
-            foreach (var item in Wait(WriteInput(version => initial with { Version = version, Empty = true }))) yield return item;
+            var icon = new State()
+            {
+                Tags = Tags.Icon,
+                Width = 512,
+                Height = 512,
+                Loops = 0,
+                Steps = 5,
+                Guidance = 5f,
+                Denoise = 0.65f,
+                Full = false,
+                Break = false,
+            };
+            WriteInput(version => frame with { Version = version, Empty = true });
 
+            var hidden = 226f;
+            var speed = 5f;
             while (true)
             {
-                if (_inputs.Space.Take())
-                {
-                    var task = WriteInput(version => initial with
-                    {
-                        Version = version,
-                        Tags = Tags.Icon | Tags.Left | Tags.Right,
-                        Width = 256,
-                        Height = 256,
-                        Loops = 0,
-                        Steps = 6,
-                        Guidance = 3f,
-                        Denoise = 0.6f,
-                        Full = false,
-                        Break = false,
-                        Load = "purple.png",
-                        Positive = $"(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Simple minimalistic figurative app icon of {Prompt}",
-                    });
-                    foreach (var item in Wait(task)) yield return item;
-                }
+                var generate = _inputs.Space.Take();
+                var prompt = $"(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Simple minimalistic figurative app icon of {Prompt}";
+                UpdateIcon(Left, prompt, _inputs.Left.Take(), generate, position => position.With(x: 0f), position => position.With(x: -hidden));
+                UpdateIcon(Right, prompt, _inputs.Right.Take(), generate, position => position.With(x: 0f), position => position.With(x: hidden));
+                UpdateIcon(Up, prompt, _inputs.Up.Take(), generate, position => position.With(y: 0f), position => position.With(y: hidden));
+                UpdateIcon(Down, prompt, _inputs.Down.Take(), generate, position => position.With(y: 0f), position => position.With(y: -hidden));
                 // if (pictures.TryDequeue(out var picture))
                 // {
                 //     var task = WriteInput(version => template with
@@ -584,9 +583,9 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 var bottom = _inputs.Down.Take() ? 128 : 0;
                 if (left > 0 || right > 0 || top > 0 || bottom > 0)
                 {
-                    var task = WriteInput(version => new[] { _resolutions.medium, _resolutions.low, _resolutions.low, _resolutions.low, _resolutions.medium }.Aggregate(
-                        initial with { Version = version, Stop = true },
-                        (state, resolution) => initial with
+                    WriteInput(version => new[] { _resolutions.medium, _resolutions.low, _resolutions.low, _resolutions.low, _resolutions.medium }.Aggregate(
+                        frame with { Version = version, Stop = true },
+                        (state, resolution) => frame with
                         {
                             Version = version,
                             Width = resolution.width,
@@ -598,19 +597,28 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Stop = true,
                             Next = state
                         }));
-                    foreach (var item in Wait(task)) yield return item;
                 }
                 else yield return null;
             }
+
+            void UpdateIcon(global::Icon component, string prompt, bool move, bool generate, Func<Vector2, Vector2> show, Func<Vector2, Vector2> hide)
+            {
+                component.Rectangle.anchoredPosition = Vector2.Lerp(component.Rectangle.anchoredPosition, move ? show(component.Rectangle.anchoredPosition) : hide(component.Rectangle.anchoredPosition), Time.deltaTime * speed);
+                component.Socket.Close.color = Color.Lerp(component.Socket.Close.color, component.Socket.Close.color.With(a: move ? Mathf.Max(1f - component.Time, 0f) : 1f), Time.deltaTime * speed);
+                component.Time = move ? component.Time + Time.deltaTime : 0f;
+
+                if (generate)
+                    WriteInput(version => icon with { Version = version, Tags = icon.Tags | component.Tags, Load = component.Load, Positive = prompt });
+            }
         }
 
-        async Task WriteInput(Func<int, State> get)
+
+        void WriteInput(Func<int, State> get)
         {
-            var version = Interlocked.Increment(ref _version);
-            var state = get(version);
+            var state = get(++_version);
             Debug.Log($"COMFY: Sending input '{state}'.");
-            await comfy.StandardInput.WriteLineAsync($"{state}");
-            await comfy.StandardInput.FlushAsync();
+            comfy.StandardInput.WriteLine($"{state}");
+            comfy.StandardInput.Flush();
         }
 
         IEnumerator UpdateInput()
@@ -709,10 +717,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
     void Update()
     {
         Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
-        _inputs.Left |= Input.GetKeyDown(KeyCode.LeftArrow);
-        _inputs.Right |= Input.GetKeyDown(KeyCode.RightArrow);
-        _inputs.Up |= Input.GetKeyDown(KeyCode.UpArrow);
-        _inputs.Down |= Input.GetKeyDown(KeyCode.DownArrow);
+        _inputs.Left |= Input.GetKey(KeyCode.LeftArrow);
+        _inputs.Right |= Input.GetKey(KeyCode.RightArrow);
+        _inputs.Up |= Input.GetKey(KeyCode.UpArrow);
+        _inputs.Down |= Input.GetKey(KeyCode.DownArrow);
         _inputs.Plus |= Input.GetKeyDown(KeyCode.Plus) || Input.GetKeyDown(KeyCode.KeypadPlus) || Input.GetKeyDown(KeyCode.Equals);
         _inputs.Minus |= Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus) || Input.GetKeyDown(KeyCode.Underscore);
         _inputs.Tab |= Input.GetKeyDown(KeyCode.Tab);
