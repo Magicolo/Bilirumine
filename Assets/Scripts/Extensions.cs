@@ -315,6 +315,8 @@ public static class Extensions
         new(r ?? color.r, g ?? color.g, b ?? color.b, a ?? color.a);
     public static Vector2 With(in this Vector2 vector, float? x = null, float? y = null) =>
         new(x ?? vector.x, y ?? vector.y);
+    public static Vector3 With(in this Vector3 vector, Vector2 xy) =>
+        new(xy.x, xy.y, vector.z);
     public static Vector3 With(in this Vector3 vector, float? x = null, float? y = null, float? z = null) =>
         new(x ?? vector.x, y ?? vector.y, z ?? vector.z);
     public static Vector4 With(in this Vector4 vector, float? x = null, float? y = null, float? z = null, float? w = null) =>

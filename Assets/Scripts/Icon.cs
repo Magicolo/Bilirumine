@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using UnityEngine;
 using UnityEngine.UI;
@@ -11,21 +13,48 @@ public struct Socket
     public Image Close;
 }
 
+public enum Colors
+{
+    Cyan,
+    Orange,
+    Purple,
+    Green,
+    White,
+    Red,
+    Yellow
+}
+
 public class Icon : MonoBehaviour
 {
+    static float Value => Random.value * 1000f;
+
     public Main.Tags Tags;
-    public string Load = "";
+    public Colors Color;
+    public string[] Themes;
+    public Vector2Int Direction;
     public RectTransform Rectangle = default!;
+    public RectTransform Shake = default!;
     public Socket Socket = default!;
-    public Image Content = default!;
-    public Mask Mask = default!;
-    public float Time { get; set; }
+    public Image Image = default!;
+    public Mask Content = default!;
 
-    float _offset;
+    [Header("Debug")]
+    public float Time;
+    public string? Description;
+    public Texture2D? Texture;
 
-    void Start() => _offset = Random.value * 1000f;
+    (float root, float socket) _offsets;
 
-    void Update() => transform.localScale = transform.localScale.With(x: Sine(), y: Sine());
+    void Start() => _offsets = (Value, Value);
 
-    float Sine() => Mathf.Sin(UnityEngine.Time.time * 2.5f + _offset) * 0.005f + 1f;
+    void Update()
+    {
+        transform.localScale = transform.localScale.With(Sine2(2.5f, 0.01f, 1f, _offsets.root));
+        Content.transform.localScale = Content.transform.localScale.With(Sine2(1.5f, 0.06f, 0.8f, _offsets.socket));
+    }
+
+    float Sine(float frequency, float amplitude, float center, float offset) =>
+        Mathf.Sin(UnityEngine.Time.time * frequency + offset) * amplitude + center;
+    Vector2 Sine2(float frequency, float amplitude, float center, float offset) =>
+        new(Sine(frequency, amplitude, center, offset), Sine(frequency, amplitude, center, offset));
 }

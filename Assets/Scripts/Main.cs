@@ -17,6 +17,8 @@ using System.Collections.Generic;
 using Debug = UnityEngine.Debug;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
+using Random = UnityEngine.Random;
 
 public sealed class Main : MonoBehaviour
 {
@@ -68,7 +70,22 @@ public sealed class Main : MonoBehaviour
     }
 
     [Serializable]
-    sealed record Word
+    sealed record GenerateRequest
+    {
+        public string Model { get => model; set => model = value; }
+        public string Prompt { get => prompt; set => prompt = value; }
+        public int[] Context { get => context; set => context = value; }
+        public bool Stream { get => stream; set => stream = value; }
+
+        [SerializeField] string model = "";
+        [SerializeField] string prompt = "";
+        [SerializeField] int[] context = Array.Empty<int>();
+        [SerializeField] bool stream;
+
+    }
+
+    [Serializable]
+    sealed record GenerateResponse
     {
         public string Model => model;
         public string CreatedAt => created_at;
@@ -123,6 +140,8 @@ public sealed class Main : MonoBehaviour
         public int Offset;
         public int Size;
         public Tags Tags;
+        public string Description;
+        public int[] Context;
     }
 
     [Flags]
@@ -135,47 +154,6 @@ public sealed class Main : MonoBehaviour
         Up = 1 << 4,
         Down = 1 << 5,
     }
-
-    // [Serializable]
-    // public sealed class CameraSettings
-    // {
-    //     public int X = 128;
-    //     public int Y = 128;
-    //     public int Rate = 30;
-    //     public int Device = 0;
-    //     public bool Flip;
-    //     public Renderer Preview = default!;
-    //     public Camera Camera = default!;
-    //     public WebCamTexture Texture = default!;
-
-    //     public IEnumerable Initialize()
-    //     {
-    //         Debug.Log($"Camera devices: {string.Join(", ", WebCamTexture.devices.Select(device => $"{device.name}: [{string.Join(", ", device.availableResolutions ?? Array.Empty<Resolution>())}]"))}");
-    //         if (!WebCamTexture.devices.TryAt(Device, out var device))
-    //         {
-    //             Debug.LogWarning("Camera not found.");
-    //             yield break;
-    //         }
-
-    //         Texture = new WebCamTexture(device.name, X, Y, Rate)
-    //         {
-    //             autoFocusPoint = null,
-    //             filterMode = FilterMode.Point,
-    //             wrapMode = TextureWrapMode.Clamp,
-    //         };
-    //         Texture.Play();
-    //         Application.quitting += () => { try { Texture.Stop(); } catch { } };
-    //         while (Texture.width < 32 && Texture.height < 32) yield return null;
-    //         Debug.Log($"Camera: {Texture.deviceName} | Resolution: {Texture.width}x{Texture.height} | FPS: {Texture.requestedFPS} | Graphics: {Texture.graphicsFormat}");
-    //         Preview.material.mainTexture = Texture;
-
-    //         var scale = Preview.transform.localScale;
-    //         scale.y = (Flip, scale.y) switch { (true, > 0f) or (false, < 0f) => -scale.y, _ => scale.y };
-    //         Preview.transform.localScale = scale;
-    //         Preview.enabled = false;
-    //         Texture.Pause();
-    //     }
-    // }
 
     static MemoryMappedFile Memory()
     {
@@ -235,7 +213,7 @@ public sealed class Main : MonoBehaviour
         return (process, client);
     }
 
-    static async IAsyncEnumerable<Word> Generate(HttpClient client, string prompt, byte[] image)
+    static async IAsyncEnumerable<GenerateResponse> Generate(HttpClient client, string prompt, byte[] image)
     {
         Debug.Log($"OLLAMA: Generating with prompt '{prompt}' and image of size '{image.Length}'.");
         var encoded = Convert.ToBase64String(image);
@@ -249,10 +227,30 @@ public sealed class Main : MonoBehaviour
         {
             var line = await reader.ReadLineAsync();
             if (string.IsNullOrWhiteSpace(line)) continue;
-            var word = JsonUtility.FromJson<Word>(line);
+            var word = JsonUtility.FromJson<GenerateResponse>(line);
             yield return word;
             if (word.Done) break;
         }
+    }
+
+    static async Task<(string description, int[] context)> Generate(HttpClient client, string prompt, int[] context)
+    {
+        var json = JsonUtility.ToJson(new GenerateRequest
+        {
+            Model = "llama3",
+            Prompt = prompt,
+            Context = context,
+            Stream = false,
+        });
+        Debug.Log($"OLLAMA: Sending request '{json}'.");
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var request = new HttpRequestMessage(HttpMethod.Post, "api/generate") { Content = content };
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+        var read = await response.Content.ReadAsStringAsync();
+        Debug.Log($"OLLAMA: Received response '{read}'.");
+        var result = JsonUtility.FromJson<GenerateResponse>(read);
+        return (result.Response.Replace('\n', ' ').Replace('\r', ' '), result.Context ?? Array.Empty<int>());
     }
 
     static bool Load(MemoryMappedFile memory, int width, int height, int offset, int size, ref Texture2D? texture)
@@ -283,12 +281,17 @@ public sealed class Main : MonoBehaviour
         return true;
     }
 
-    static NativeArray<byte> Buffer(int width, int height)
+    static bool Load(MemoryMappedFile memory, global::Icon component, Icon icon)
     {
-        var buffer = new NativeArray<byte>(width * height * 4, Allocator.Persistent);
-        Application.quitting += () => { try { AsyncGPUReadback.WaitAllRequests(); } catch { } };
-        Application.quitting += () => { try { buffer.Dispose(); } catch { } };
-        return buffer;
+        if (icon.Tags.HasFlag(component.Tags) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref component.Texture))
+        {
+            var area = new Rect(0f, 0f, icon.Width, icon.Height);
+            component.Image.sprite = Sprite.Create(component.Texture, area, area.center);
+            component.Description = icon.Description;
+            return true;
+        }
+        else
+            return false;
     }
 
     static IEnumerable Wait(Task task)
@@ -332,11 +335,11 @@ public sealed class Main : MonoBehaviour
 
     public string Prompt = "Melting Train";
 
-    // public CameraSettings Camera = new();
     public global::Icon Left = default!;
     public global::Icon Right = default!;
     public global::Icon Up = default!;
     public global::Icon Down = default!;
+    public RectTransform Center = default!;
     public Image Flash = default!;
     public Renderer Output = default!;
     public TMP_Text Statistics = default!;
@@ -352,8 +355,6 @@ public sealed class Main : MonoBehaviour
         using var __ = ollama.process;
         using var ___ = ollama.client;
 
-        // foreach (var item in Camera.Initialize()) yield return item;
-
         var resolutions = (width: 0, height: 0);
         var watch = Stopwatch.StartNew();
         var delta = (image: 0.1f, batch: 5f, wait: 0.1f, speed: 1f);
@@ -361,87 +362,22 @@ public sealed class Main : MonoBehaviour
             images: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta.image))),
             batches: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 5).Select(_ => TimeSpan.FromSeconds(delta.batch))));
         var frames = new ConcurrentQueue<Frame>();
-        var icons = new ConcurrentQueue<Icon>();
-        // var pictures = new ConcurrentQueue<Picture>();
-        // StartCoroutine(UpdateCamera());
+        var icons = (
+            components: new[] { Left, Right, Up, Down },
+            queue: new ConcurrentQueue<Icon>(),
+            map: new ConcurrentDictionary<int, (string description, int[] context)>());
         StartCoroutine(UpdateFrames());
         StartCoroutine(UpdateIcons());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateInput());
         StartCoroutine(UpdateDebug());
-        // StartCoroutine(UpdatePrompt());
 
         foreach (var item in Wait(ReadOutput()))
         {
             Cursor.visible = Application.isEditor;
             yield return item;
         }
-
-        // IEnumerator UpdatePrompt()
-        // {
-        //     while (true)
-        //     {
-        //         // if (_inputs.Space.Take())
-        //         // {
-        //         //     Debug.Log($"GENERATE: Space");
-        //         //     var task = Generate("Write 10 random words.");
-        //         //     foreach (var item in Wait(Generate("Write 10 random words.")))
-        //         //     {
-        //         //         if (item is null) yield return item;
-        //         //         else Debug.Log($"GENERATE: {item}");
-        //         //     }
-        //         // }
-        //         yield return null;
-        //     }
-        // }
-
-        // IEnumerator UpdateCamera()
-        // {
-        //     var (width, height) = (Camera.Texture.width, Camera.Texture.height);
-        //     var buffer = Buffer(width, height);
-        //     var texture = new Texture2D(width, height, TextureFormat.ARGB32, 1, true, true);
-        //     while (true)
-        //     {
-        //         if (_inputs.Shift.Take())
-        //         {
-        //             var task = WriteInput(version => new() { Version = version, Skip = true, Stop = true });
-        //             Camera.Texture.Play();
-        //             yield return null;
-        //             Camera.Preview.enabled = true;
-        //             foreach (var item in Wait(task)) yield return item;
-        //         }
-        //         else if (Camera.Preview.enabled)
-        //         {
-        //             Flash.color = Flash.color.With(a: 1f);
-        //             Camera.Texture.Pause();
-        //             var request = AsyncGPUReadback.RequestIntoNativeArray(ref buffer, Camera.Texture);
-        //             while (!request.done) yield return null;
-
-        //             // texture.LoadRawTextureData(buffer);
-        //             // texture.Apply();
-        //             // Debug.Log($"OLLAMA: Generate with raw image '{buffer.Length}'.");
-        //             // var encoded = texture.EncodeToPNG();
-        //             // Debug.Log($"OLLAMA: Generate with encoded image '{encoded.Length}'.");
-        //             // var generate = Task.Run(async () =>
-        //             // {
-        //             //     await foreach (var item in Generate(ollama.client, "Describe the image.", encoded))
-        //             //         Debug.Log($"OLLAMA: Generated '{item}'.");
-        //             // });
-
-        //             var data = Convert.ToBase64String(buffer.AsReadOnlySpan());
-        //             pictures.Enqueue(new() { Width = width, Height = height, Data = data });
-        //             Camera.Preview.enabled = false;
-        //             // foreach (var item in Wait(generate)) yield return item;
-        //         }
-        //         else
-        //         {
-        //             Camera.Texture.Pause();
-        //             Camera.Preview.enabled = false;
-        //         }
-        //         yield return null;
-        //     }
-        // }
 
         IEnumerator UpdateFrames()
         {
@@ -466,21 +402,11 @@ public sealed class Main : MonoBehaviour
 
         IEnumerator UpdateIcons()
         {
-            var target = (left: default(Texture2D), right: default(Texture2D), up: default(Texture2D), down: default(Texture2D));
             while (true)
             {
-                if (icons.TryDequeue(out var icon))
-                {
-                    var area = new Rect(0f, 0f, icon.Width, icon.Height);
-                    if (icon.Tags.HasFlag(Tags.Left) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.left))
-                        Left.Content.sprite = Sprite.Create(target.left, area, area.center);
-                    if (icon.Tags.HasFlag(Tags.Right) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.right))
-                        Right.Content.sprite = Sprite.Create(target.right, area, area.center);
-                    if (icon.Tags.HasFlag(Tags.Up) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.up))
-                        Up.Content.sprite = Sprite.Create(target.up, area, area.center);
-                    if (icon.Tags.HasFlag(Tags.Down) && Load(memory, icon.Width, icon.Height, icon.Offset, icon.Size, ref target.down))
-                        Down.Content.sprite = Sprite.Create(target.down, area, area.center);
-                }
+                if (icons.queue.TryDequeue(out var icon))
+                    foreach (var target in icons.components)
+                        Load(memory, target, icon);
                 yield return null;
             }
         }
@@ -540,85 +466,98 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Full = true,
                 Break = true,
             };
-            var icon = new State()
-            {
-                Tags = Tags.Icon,
-                Width = 512,
-                Height = 512,
-                Loops = 0,
-                Steps = 5,
-                Guidance = 5f,
-                Denoise = 0.65f,
-                Full = false,
-                Break = false,
-            };
             WriteInput(version => frame with { Version = version, Empty = true });
 
             var hidden = 226f;
             var speed = 5f;
+            var context = Array.Empty<int>();
             while (true)
             {
                 var generate = _inputs.Space.Take();
-                var prompt = $"(ultra detailed, oil painting, abstract, conceptual, hyper realistic, vibrant) Simple minimalistic figurative app icon of {Prompt}";
-                UpdateIcon(Left, prompt, _inputs.Left.Take(), generate, position => position.With(x: 0f), position => position.With(x: -hidden));
-                UpdateIcon(Right, prompt, _inputs.Right.Take(), generate, position => position.With(x: 0f), position => position.With(x: hidden));
-                UpdateIcon(Up, prompt, _inputs.Up.Take(), generate, position => position.With(y: 0f), position => position.With(y: hidden));
-                UpdateIcon(Down, prompt, _inputs.Down.Take(), generate, position => position.With(y: 0f), position => position.With(y: -hidden));
-                // if (pictures.TryDequeue(out var picture))
-                // {
-                //     var task = WriteInput(version => template with
-                //     {
-                //         Version = version,
-                //         Width = picture.Width,
-                //         Height = picture.Height,
-                //         Image = picture.Data,
-                //         Next = template with { Version = version },
-                //     });
-                //     foreach (var item in Wait(task)) yield return item;
-                // }
+                var task = Task.WhenAll(
+                    UpdateIcon(Left, _inputs.Left.Take(), generate, position => position.With(x: 0f), position => position.With(x: -hidden), context),
+                    UpdateIcon(Right, _inputs.Right.Take(), generate, position => position.With(x: 0f), position => position.With(x: hidden), context),
+                    UpdateIcon(Up, _inputs.Up.Take(), generate, position => position.With(y: 0f), position => position.With(y: hidden), context),
+                    UpdateIcon(Down, _inputs.Down.Take(), generate, position => position.With(y: 0f), position => position.With(y: -hidden), context));
+                foreach (var item in Wait(task)) yield return item;
+                yield return null;
+            }
 
-                var left = _inputs.Left.Take() ? 160 : 0;
-                var right = _inputs.Right.Take() ? 160 : 0;
-                var top = _inputs.Up.Take() ? 128 : 0;
-                var bottom = _inputs.Down.Take() ? 128 : 0;
-                if (left > 0 || right > 0 || top > 0 || bottom > 0)
+            async Task UpdateIcon(global::Icon component, bool move, bool generate, Func<Vector2, Vector2> show, Func<Vector2, Vector2> hide, int[] context)
+            {
+                var prompt = $"In a sequence of eccentric storytelling images, describe the next wildly surreal impossible creative image with themes loosely related to the color '{component.Color}' and vaguely inspired by [{string.Join(", ", component.Themes)}] and that follows from the previous description. Allow yourself to diverge creatively and explore niche subjects. Your answer must strictly consist of a short succinct summary image description; nothing else; no salutation, no introduction.";
                 {
+                    var source = component.Rectangle.anchoredPosition;
+                    var target = move ? show(source) : hide(source);
+                    var position = Vector2.Lerp(source, target, Time.deltaTime * speed);
+                    component.Rectangle.anchoredPosition = position;
+                }
+                {
+                    var alpha = move ? Mathf.Max(1f - component.Time, 0f) : 1f;
+                    var source = component.Socket.Close.color;
+                    var target = source.With(a: alpha);
+                    var color = Color.Lerp(source, target, Time.deltaTime * speed);
+                    component.Socket.Close.color = color;
+                }
+                {
+                    var random = new Vector3(Random.value, Random.value) * 2.5f;
+                    var shake = random * Mathf.Clamp(component.Time - 5f, 0f, 5f);
+                    component.Shake.anchoredPosition = shake;
+                }
+                component.Time = move ? component.Time + Time.deltaTime : 0f;
+
+                if (generate)
+                {
+                    var pair = await Generate(ollama.client, prompt, context);
+                    var positive = $"(oil painting, vibrant, toon, surreal, close up, huge, simple, minimalistic, figurative) App icon: {pair.description}";
+                    var version = WriteInput(version => new State()
+                    {
+                        Version = version,
+                        Tags = Tags.Icon | component.Tags,
+                        Load = $"{component.Color}.png".ToLowerInvariant(),
+                        Positive = positive,
+                        Width = 384,
+                        Height = 384,
+                        Loops = 0,
+                        Steps = 10,
+                        Guidance = 8f,
+                        Denoise = 0.6f,
+                        Full = false,
+                        Break = false,
+                    });
+                    icons.map.TryAdd(version, pair);
+                }
+
+                if (component.Time >= 10f)
+                {
+                    Flash.color = Flash.color.With(a: 1f);
                     WriteInput(version => new[] { _resolutions.medium, _resolutions.low, _resolutions.low, _resolutions.low, _resolutions.medium }.Aggregate(
-                        frame with { Version = version, Stop = true },
+                        frame with { Version = version, Stop = true, Positive = component.Description },
                         (state, resolution) => frame with
                         {
                             Version = version,
                             Width = resolution.width,
                             Height = resolution.height,
-                            Left = left,
-                            Right = right,
-                            Top = top,
-                            Bottom = bottom,
+                            Left = Math.Max(-component.Direction.x, 0),
+                            Right = Math.Max(component.Direction.x, 0),
+                            Top = Math.Max(component.Direction.y, 0),
+                            Bottom = Math.Max(-component.Direction.y, 0),
                             Stop = true,
+                            Positive = component.Description,
                             Next = state
                         }));
                 }
-                else yield return null;
-            }
-
-            void UpdateIcon(global::Icon component, string prompt, bool move, bool generate, Func<Vector2, Vector2> show, Func<Vector2, Vector2> hide)
-            {
-                component.Rectangle.anchoredPosition = Vector2.Lerp(component.Rectangle.anchoredPosition, move ? show(component.Rectangle.anchoredPosition) : hide(component.Rectangle.anchoredPosition), Time.deltaTime * speed);
-                component.Socket.Close.color = Color.Lerp(component.Socket.Close.color, component.Socket.Close.color.With(a: move ? Mathf.Max(1f - component.Time, 0f) : 1f), Time.deltaTime * speed);
-                component.Time = move ? component.Time + Time.deltaTime : 0f;
-
-                if (generate)
-                    WriteInput(version => icon with { Version = version, Tags = icon.Tags | component.Tags, Load = component.Load, Positive = prompt });
             }
         }
 
-
-        void WriteInput(Func<int, State> get)
+        int WriteInput(Func<int, State> get)
         {
-            var state = get(++_version);
+            var version = Interlocked.Increment(ref _version);
+            var state = get(_version);
             Debug.Log($"COMFY: Sending input '{state}'.");
             comfy.StandardInput.WriteLine($"{state}");
             comfy.StandardInput.Flush();
+            return version;
         }
 
         IEnumerator UpdateInput()
@@ -694,9 +633,9 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             then.batch = now;
                         }
                     }
-                    if (tags.HasFlag(Tags.Icon))
+                    if (tags.HasFlag(Tags.Icon) && icons.map.TryRemove(version, out var pair))
                     {
-                        icons.Enqueue(new Icon
+                        icons.queue.Enqueue(new Icon
                         {
                             Version = version,
                             Width = width,
@@ -704,11 +643,13 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Offset = offset,
                             Size = size,
                             Tags = tags,
+                            Description = pair.description,
+                            Context = pair.context
                         });
                     }
                 }
-                catch (FormatException) { Debug.Log($"COMFY: {line}"); }
-                catch (IndexOutOfRangeException) { Debug.Log($"COMFY: {line}"); }
+                catch (FormatException) { Debug.LogWarning($"COMFY: {line}"); }
+                catch (IndexOutOfRangeException) { Debug.LogWarning($"COMFY: {line}"); }
                 catch (Exception exception) { Debug.LogException(exception); }
             }
         }
