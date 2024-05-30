@@ -34,7 +34,7 @@ services:
       - 11432:11434
     environment:
       - OLLAMA_MAX_VRAM=2500000000
-      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_NUM_PARALLEL=1
     volumes:
       - ./input:/input
       - ollama:/root/.ollama

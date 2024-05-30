@@ -24,13 +24,13 @@ public enum Colors
     Yellow
 }
 
-public class Icon : MonoBehaviour
+public sealed class Arrow : MonoBehaviour
 {
     static float Value => Random.value * 1000f;
 
     public Main.Tags Tags;
     public Colors Color;
-    public string[] Themes;
+    public string[] Themes = { };
     public Vector2Int Direction;
     public RectTransform Rectangle = default!;
     public RectTransform Shake = default!;
@@ -41,7 +41,14 @@ public class Icon : MonoBehaviour
     [Header("Debug")]
     public float Time;
     public string? Description;
+    public int[]? Context;
     public Texture2D? Texture;
+
+    public bool Idle => Time <= 0f;
+    public bool Preview => Moving && Time <= 3.75f;
+    public bool Moving => Time > 0f;
+    public bool Chosen => Time >= 7.5f;
+    public bool Hidden => Context is null or { Length: 0 } || string.IsNullOrWhiteSpace(Description);
 
     (float root, float socket) _offsets;
 
@@ -52,6 +59,8 @@ public class Icon : MonoBehaviour
         transform.localScale = transform.localScale.With(Sine2(2.5f, 0.01f, 1f, _offsets.root));
         Content.transform.localScale = Content.transform.localScale.With(Sine2(1.5f, 0.06f, 0.8f, _offsets.socket));
     }
+
+    public void Hide() { Context = null; Description = null; Time = 0f; }
 
     float Sine(float frequency, float amplitude, float center, float offset) =>
         Mathf.Sin(UnityEngine.Time.time * frequency + offset) * amplitude + center;

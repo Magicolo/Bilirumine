@@ -1,5 +1,5 @@
-import random, sys, ast, threading, torch, base64, asyncio, numpy, os, pickle, traceback, mmap
-from queue import SimpleQueue
+import random, sys, ast, threading, torch, asyncio, os, pickle, mmap
+from queue import SimpleQueue, Empty
 
 sys.path.append("/comfy")
 import server, execution
@@ -13,7 +13,6 @@ from nodes import (
     VAEEncode,
     EmptyImage,
     ImageScale,
-    VAEEncodeForInpaint,
     ImagePadForOutpaint,
     VAEDecode,
     init_custom_nodes,
@@ -45,22 +44,6 @@ def error(message):
         sys.stderr.flush()
 
 
-def encode(image):
-    image = image.numpy().flatten()
-    image = numpy.clip(image * 255.0, 0, 255).astype(numpy.uint8)
-    image = base64.b64encode(image.tobytes()).decode("utf-8")
-    return image
-
-
-def decode(image, width, height):
-    image = base64.b64decode(image)
-    image = numpy.frombuffer(image, dtype=numpy.uint8)
-    image = image.astype(numpy.float32) / 255.0
-    image = image.reshape(1, height, width, 4)
-    image = torch.tensor(image[:, :, :, 1:])
-    return image
-
-
 def clipped(name, prompt, clip, cache):
     def encode(prompt, clip):
         with torch.inference_mode():
@@ -88,41 +71,90 @@ def clipped(name, prompt, clip, cache):
     return encoded
 
 
-def iterate(state: dict, steps):
-    while state["version"] >= STOP:
-        output = next(steps)
-        if output is not None:
-            return output
+def iterate(tasks: SimpleQueue):
+    global PAUSE, CANCEL
+
+    for _ in range(tasks.qsize()):
+        (state, steps) = tasks.get()
+        while True:
+            if state["version"] in CANCEL:
+                break
+            elif state["version"] in PAUSE:
+                tasks.put((state, steps), block=False)
+                break
+            else:
+                output = next(steps)
+                if output is None:
+                    continue
+                yield output
+                break
+
+
+def reserve(size: int):
+    global NEXT, CAPACITY, GENERATION, MEMORY_LOCK
+
+    with MEMORY_LOCK:
+        if NEXT + size > CAPACITY:
+            offset, NEXT = 0, 0
+            GENERATION += 1
+        else:
+            offset = NEXT
+        NEXT += size
+
+        return offset, GENERATION
+
+
+def load(state: dict, memory: mmap.mmap = None):
+    global GENERATION
+
+    if (
+        state["size"]
+        and state["shape"]
+        and state["generation"] == GENERATION
+        and memory
+    ):
+        memory.seek(state["offset"])
+        data = memory.read(state["size"])
+        loaded = torch.frombuffer(data, dtype=torch.uint8)
+        loaded = loaded.to(dtype=torch.float32)
+        loaded = loaded / 255.0
+        loaded = loaded.reshape(state["shape"], 3)
+    elif state["load"]:
+        (loaded, _) = LoadImage().load_image(state["load"])
+    elif state["empty"]:
+        (loaded,) = EmptyImage().generate(state["width"], state["height"], 1, 0)
+    else:
+        loaded = None
+    return loaded
 
 
 def read(send):
-    global IMAGE, STOP, BREAK
+    global PAUSE, CANCEL
 
-    with torch.inference_mode():
-        load = LoadImage()
-        empty = EmptyImage()
-        while True:
-            try:
-                state = {**ast.literal_eval(input()), "loop": 0}
-                BREAK = max(BREAK, state["version"] * state["break"])
-                STOP = max(STOP, state["version"] * state["stop"])
+    with open(MEMORY, "r+b") as file:
+        with mmap.mmap(file.fileno(), CAPACITY, access=mmap.ACCESS_READ) as memory:
+            with torch.inference_mode():
+                (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
+                    "dreamshaperXL_v21TurboDPMSDE.safetensors"
+                )
+                while True:
+                    state = {
+                        **ast.literal_eval(input()),
+                        "model": model,
+                        "clip": clip,
+                        "vae": vae,
+                    }
+                    if state["cancel"]:
+                        CANCEL = CANCEL.union(state["cancel"])
+                    if state["pause"] or state["resume"]:
+                        PAUSE = PAUSE.union(state["pause"]).difference(state["resume"])
+                    loaded = load(state, memory)
+                    if loaded is None:
+                        continue
+                    send.put((state, loaded), block=False)
 
-                if state["image"]:
-                    image = decode(state["image"], state["width"], state["height"])
-                elif state["load"]:
-                    (image, _) = load.load_image(state["load"])
-                elif state["empty"]:
-                    (image,) = empty.generate(state["width"], state["height"], 1, 0)
-                else:
-                    image = IMAGE
 
-                send.put((state, image), block=False)
-            except:
-                error(traceback.format_exc())
-
-
-def extend(receive: SimpleQueue, send: SimpleQueue):
-
+def extend(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
     def steps(state, loaded):
         yield None
         # Apply random variation to outpaint to reduce recurring patterns.
@@ -157,26 +189,28 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
                 min(state["width"], state["height"]) // 4,
             )
             yield None
-            (encoded,) = encoder.encode(vae, padded, mask, 0)
+            (positive,) = clipper.encode(text=state["positive"], clip=state["clip"])
             yield None
-            positive = clipped("extend", state["positive"], clip, state["cache"])
+            (negative,) = clipper.encode(text=state["negative"], clip=state["clip"])
             yield None
-            negative = clipped("extend", state["negative"], clip, state["cache"])
+            (positive, negative, encoded) = encoder.encode(
+                positive, negative, padded, state["vae"], mask
+            )
             yield None
             (sampled,) = sampler.sample(
                 seed=seed(),
                 steps=1,
-                cfg=5,
+                cfg=1.0,
                 sampler_name="lcm",
-                scheduler="sgm_uniform",
+                scheduler="simple",
                 denoise=1.0,
-                model=model,
+                model=state["model"],
                 positive=positive,
                 negative=negative,
                 latent_image=encoded,
             )
             yield None
-            (decoded,) = decoder.decode(samples=sampled, vae=vae)
+            (decoded,) = decoder.decode(samples=sampled, vae=state["vae"])
             yield None
         else:
             decoded = cropped
@@ -192,35 +226,40 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
         yield (scaled, zoomed)
 
     with torch.inference_mode():
-        encoder = VAEEncodeForInpaint()
+        clipper = CLIPTextEncode()
+        encoder = NODE_CLASS_MAPPINGS["InpaintModelConditioning"]()
         decoder = VAEDecode()
         cropper = NODE_CLASS_MAPPINGS["ImageCrop"]()
         padder = ImagePadForOutpaint()
         scaler = ImageScale()
         sampler = KSampler()
-        (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
-            "dreamshaperXL_lightningInpaint.safetensors"
-        )
         while True:
             try:
-                (state, loaded) = receive.get(block=True)
-                (scaled, zoomed) = iterate(state, steps(state, loaded))
+                wait = None if tasks.empty() else WAIT
+                (state, loaded) = receive.get(block=True, timeout=wait)
+                tasks.put((state, steps(state, loaded)), block=False)
+            except Empty:
+                pass
+
+            for scaled, zoomed in iterate(tasks):
                 send.put((state, scaled, zoomed), block=False)
-            except:
-                error(traceback.format_exc())
 
 
 def detail(
-    receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue, end: SimpleQueue
+    receive: SimpleQueue,
+    send: SimpleQueue,
+    loop: SimpleQueue,
+    end: SimpleQueue,
+    tasks: SimpleQueue,
 ):
 
     def steps(state: dict, scaled, zoomed):
         yield None
-        positive = clipped("detail", state["positive"], clip, state["cache"])
+        (positive,) = clipper.encode(text=state["positive"], clip=state["clip"])
         yield None
-        negative = clipped("detail", state["negative"], clip, state["cache"])
+        (negative,) = clipper.encode(text=state["negative"], clip=state["clip"])
         yield None
-        (encoded,) = encoder.encode(vae, zoomed)
+        (encoded,) = encoder.encode(state["vae"], zoomed)
         yield None
         (sampled,) = sampler.sample(
             seed=seed(),
@@ -229,43 +268,43 @@ def detail(
             sampler_name="euler_ancestral",
             scheduler="sgm_uniform",
             denoise=state["denoise"],
-            model=model,
+            model=state["model"],
             positive=positive,
             negative=negative,
             latent_image=encoded,
         )
         yield None
-        (decoded,) = decoder.decode(samples=sampled, vae=vae)
+        (decoded,) = decoder.decode(samples=sampled, vae=state["vae"])
         yield decoded
 
     with torch.inference_mode():
+        clipper = CLIPTextEncode()
         encoder = VAEEncode()
         decoder = VAEDecode()
         sampler = KSampler()
-        (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
-            "dreamshaperXL_v21TurboDPMSDE.safetensors"
-        )
         while True:
             try:
-                (state, scaled, zoomed) = receive.get(block=True)
-                decoded = iterate(state, steps(state, scaled, zoomed))
+                wait = None if tasks.empty() else WAIT
+                (state, scaled, zoomed) = receive.get(block=True, timeout=wait)
+                tasks.put((state, steps(state, scaled, zoomed)), block=False)
+            except Empty:
+                pass
 
+            for decoded in iterate(tasks):
                 if state["full"]:
                     send.put((state, scaled, decoded), block=False)
                 else:
                     end.put((state, decoded), block=False)
 
-                if state["version"] >= BREAK and state["loop"] < state["loops"]:
-                    next = state if state["next"] is None else state["next"]
-                    next = {**next, "loop": state["loop"] + 1}
-                    loop.put((next, decoded), block=False)
-            except:
-                error(traceback.format_exc())
+                if state["next"]:
+                    next = {**state, **state["next"]}
+                    loaded = load(next)
+                    loop.put((next, decoded if loaded is None else loaded), block=False)
+                elif state["loop"]:
+                    loop.put((state, decoded), block=False)
 
 
-def interpolate(receive: SimpleQueue, send: SimpleQueue):
-    global IMAGE
-
+def interpolate(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
     def steps(state, scaled, decoded):
         yield None
         (batched,) = batcher.batch(scaled, decoded)
@@ -274,7 +313,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
             ckpt_name="rife49.pth",
             frames=batched,
             clear_cache_after_n_frames=100,
-            multiplier=6,
+            multiplier=8,
             fast_mode=True,
             ensemble=True,
             scale_factor=0.25,
@@ -284,7 +323,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
             ckpt_name="rife49.pth",
             frames=interpolated,
             clear_cache_after_n_frames=100,
-            multiplier=9,
+            multiplier=8,
             fast_mode=True,
             ensemble=True,
             scale_factor=1,
@@ -296,55 +335,73 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
         interpolator = NODE_CLASS_MAPPINGS["RIFE VFI"]()
         while True:
             try:
-                (state, scaled, decoded) = receive.get(block=True)
-                images = iterate(state, steps(state, scaled, decoded))
-                images, IMAGE = images[1:], images[-1:]
-                send.put((state, images), block=False)
-            except:
-                error(traceback.format_exc())
+                wait = None if tasks.empty() else WAIT
+                (state, scaled, decoded) = receive.get(block=True, timeout=wait)
+                tasks.put((state, steps(state, scaled, decoded)), block=False)
+            except Empty:
+                pass
+
+            for images in iterate(tasks):
+                send.put((state, images[1:]), block=False)
 
 
-def write(receive: SimpleQueue):
-    with open("/dev/shm/bilirumine", "r+b") as file:
-        capacity = 1024 * 1024 * 1024
-        next = 0
-        with mmap.mmap(file.fileno(), capacity) as memory:
+def write(receive: SimpleQueue, tasks: SimpleQueue):
+
+    def steps(state, images):
+        yield None
+        [count, height, width, _] = images.shape
+        images = images * 255.0
+        yield None
+        images = images.clamp(0.0, 255.0)
+        yield None
+        images = images.to(dtype=torch.uint8)
+        yield None
+        images = images.numpy()
+        yield None
+        data = images.tobytes()
+        yield None
+        size = len(data)
+        offset, generation = reserve(size)
+        yield None
+        memory.seek(offset)
+        memory.write(data)
+        yield None
+        output(
+            f'{state["version"]},{state["tags"]},{width},{height},{count},{offset},{size},{generation}'
+        )
+        yield None
+        torch.cuda.empty_cache()
+        yield True
+
+    with open(MEMORY, "r+b") as file:
+        with mmap.mmap(file.fileno(), CAPACITY, access=mmap.ACCESS_WRITE) as memory:
             with torch.inference_mode():
                 while True:
                     try:
-                        (state, images) = receive.get(block=True)
-                        [count, height, width, _] = images.shape
-                        images = images * 255.0
-                        images = images.clamp(0.0, 255.0)
-                        images = images.to(dtype=torch.uint8)
-                        images = images.numpy()
-                        data = images.tobytes()
-                        size = len(data)
+                        wait = None if tasks.empty() else WAIT
+                        (state, images) = receive.get(block=True, timeout=wait)
+                        tasks.put((state, steps(state, images)), block=False)
+                    except Empty:
+                        pass
 
-                        if next + size > capacity:
-                            offset, next = 0, 0
-                        else:
-                            offset = next
-
-                        next += size
-                        memory.seek(offset)
-                        memory.write(data)
-                        output(
-                            f'{state["version"]},{state["loop"]},{state["tags"]},{width},{height},{count},{offset},{size}'
-                        )
-                        torch.cuda.empty_cache()
-                    except:
-                        error(traceback.format_exc())
+                    for _ in iterate(tasks):
+                        pass
 
 
-IMAGE = None
-STOP = 0
-BREAK = 0
+WAIT = 0.1
+PAUSE = set()
+CANCEL = set()
 CLIPS = {}
+GENERATION = 1
+CAPACITY = 2**31 - 1
+NEXT = 0
+MEMORY = "/dev/shm/bilirumine"
+MEMORY_LOCK = threading.Lock()
 CLIP_LOCK = threading.Lock()
 INPUT_LOCK = threading.Lock()
 OUTPUT_LOCK = threading.Lock()
 ERROR_LOCK = threading.Lock()
+
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 instance = server.PromptServer(loop)
@@ -356,10 +413,10 @@ c = SimpleQueue()
 d = SimpleQueue()
 threads = [
     threading.Thread(target=read, args=(a,)),
-    threading.Thread(target=extend, args=(a, b)),
-    threading.Thread(target=detail, args=(b, c, a, d)),
-    threading.Thread(target=interpolate, args=(c, d)),
-    threading.Thread(target=write, args=(d,)),
+    threading.Thread(target=extend, args=(a, b, SimpleQueue())),
+    threading.Thread(target=detail, args=(b, c, a, d, SimpleQueue())),
+    threading.Thread(target=interpolate, args=(c, d, SimpleQueue())),
+    threading.Thread(target=write, args=(d, SimpleQueue())),
 ]
 for thread in threads:
     thread.start()

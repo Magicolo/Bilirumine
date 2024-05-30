@@ -477,6 +477,9 @@ public static class Extensions
         }
     }
 
+    public static IEnumerable<(T item, int index)> Enumerate<T>(this IEnumerable<T> source) =>
+        source.Select((item, index) => (item, index));
+
     public static (IEnumerable<T1>, IEnumerable<T2>) Unzip<T1, T2>(this IEnumerable<(T1, T2)> source)
     {
         var items = source.ToArray();
