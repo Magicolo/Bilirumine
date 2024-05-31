@@ -16,10 +16,7 @@ using System.Collections.Generic;
 
 /*
     TODO
-    - Fix the skip bug that happens when alternating between choice sockets.
-    - If the motion frames are not yet ready after activating a socket, stall the shake animation.
-    - Choice sockets must not appear before the motion is done.
-        - Delay icon generation until motion is done?
+    - Can I run a comfy instance on the CPU?
     - Make the prompt LLM generate more diverse visual styles and subjects.
     - Add a visual indication that motion is happening.
     - Communicate that the button must be held for a direction to be taken.
@@ -29,6 +26,10 @@ using System.Collections.Generic;
     - Add SFX. How can I generate them with an AI?
     - Display the prompt? Use a TTS model to read out the prompt?
     - Use a llava model as an LLM to generate prompts given the current image?
+
+    BUGS:
+    - After navigating with icons a few times, sometimes the chosen icon never resolves (remains stuck in full shake).
+    - Sometimes, icons remain black (with some noise).
 */
 public sealed class Main : MonoBehaviour
 {
@@ -141,8 +142,7 @@ public sealed class Main : MonoBehaviour
 
     static readonly ((int width, int height) low, (int width, int height) high) _resolutions =
     (
-        (640, 384),
-        // (768, 512),
+        (768, 512),
         (896, 640)
     );
 
@@ -278,7 +278,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
             var speed = 3.75f;
             var styles = Utility.Styles("ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant");
             var positive = $"{styles} Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.";
-            var negative = "nude, naked, nudity, youth, child, children, blurry, worst quality, low detail";
+            var negative = Utility.Styles("nude", "naked", "nudity", "youth", "child", "children", "blurry", "worst quality", "low detail");
             var frame = new State()
             {
                 Tags = Tags.Frame,
@@ -286,9 +286,9 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Height = _resolutions.high.height,
                 Loop = true,
                 Zoom = 64,
-                Steps = 6,
-                Guidance = 5f,
-                Denoise = 0.55f,
+                Steps = 5,
+                Guidance = 4f,
+                Denoise = 0.6f,
                 Negative = negative,
                 Full = true,
             };
@@ -309,10 +309,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 switch ((choice.chosen, icons.arrows.FirstOrDefault(arrow => arrow.Moving)))
                 {
                     // Begin choice.
-                    case (null, { } moving):
+                    case (null, { Icon: { } icon } moving):
                         _play = false;
                         choice.chosen = moving;
-                        choice.positive = $"{styles} ({moving.Color}) {moving.Description}";
+                        choice.positive = $"{styles} ({moving.Color}) {icon.Description}";
                         choice.version = WriteInput(version => State.Sequence(
                             frame with
                             {
@@ -325,8 +325,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                                 Shape = (_frame.Width, _frame.Height),
                                 Width = _resolutions.low.width,
                                 Height = _resolutions.low.height,
-                                Steps = 6,
-                                Guidance = 5f,
+                                Steps = 5,
+                                Guidance = 6f,
                                 Denoise = 0.4f,
                                 Pause = new[] { loop },
                                 Left = Math.Max(-moving.Direction.x, 0),
@@ -335,8 +335,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                                 Bottom = Math.Max(-moving.Direction.y, 0),
                             },
                             state => state with { Tags = state.Tags | Tags.Begin, Positive = $"{positive}" },
-                            state => state with { Positive = $"{positive}" },
-                            state => state with { Positive = $"{choice.positive}" },
+                            state => state with { Positive = $"{positive} {choice.positive}" },
+                            state => state with { Positive = $"{choice.positive} {positive}" },
                             state => state with { Tags = state.Tags | Tags.End, Positive = $"{choice.positive}" },
                             _ => frame with { Version = version, Positive = $"{choice.positive}" }
                         ));
@@ -382,7 +382,16 @@ Resolution: {resolutions.width}x{resolutions.height}";
             Task GenerateIcons(int end, string positive, string negative) => Task.WhenAll(icons.arrows.Select(async arrow =>
             {
                 var random = new System.Random();
-                var prompt = $"Given this previous image description '{arrow.Description}', in a sequence of eccentric impromptu story telling images, write a short succinct summary description of maximum 25 words of the next wildly surreal impossible creative image with themes loosely related to the color '{arrow.Color}' and its vague connotations, that follows from the previous image description and including an exotic bizarre wonderful visual style. Allow yourself to diverge creatively and explore niche subjects and visual styles. Your answer must strictly consist of a visual style and an image description of maximum 25 words; nothing else; no salutation, no acknowledgement, no introduction; just the description.";
+                var prompt = $@"
+Previous image description: '{arrow.Icon?.Description}'
+
+You are a divergent, creative and eccentric artist that excels in telling masterful and powerful impromptu stories through image descriptions.
+Write a short succinct summary description of the next wildly surreal impossible creative image.
+Its themes must metaphorically loosely partially vaguely be related to the connotations and poetic imagery of the color '{arrow.Color}'.
+It must follow narratively and constrastively from the previous image description.
+It must include an exotic, bizarre, wonderful and nice visual style.
+Favor abstract concepts and ideas rather than concrete subjects.
+Your answer must strictly consist of visual styles and an image description of maximum 50 words; nothing else; no salutation, no word count, no acknowledgement, no introduction; just the description.";
                 var description = await Utility.Generate(ollama.client, prompt);
                 while (_end < end) await Task.Delay(100);
 
@@ -398,11 +407,11 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         Load = $"{arrow.Color}.png".ToLowerInvariant(),
                         Positive = positive,
                         Negative = negative,
-                        Width = 384,
-                        Height = 384,
-                        Steps = 6,
-                        Guidance = 5.5f,
-                        Denoise = 0.65f,
+                        Width = 512,
+                        Height = 512,
+                        Steps = 5,
+                        Guidance = 3f,
+                        Denoise = 0.7f,
                     };
                 });
             }));
@@ -411,7 +420,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
             {
                 var hidden = icons.arrows.Any(arrow => arrow.Hidden);
                 var move =
-                    (inputs[index] || arrow.Preview) &&
+                    inputs[index] &&
+                    // (inputs[index] || arrow.Preview) &&
                     inputs.Enumerate().All(pair => pair.index == index || !pair.item) &&
                     icons.arrows.All(other => arrow == other || other.Idle);
                 {
@@ -434,7 +444,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 }
                 {
                     var source = arrow.Shake.localScale;
-                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time / 3.75f, 2f), 1.25f) : Vector3.one;
+                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time / 3.75f, 2f), 1f) : Vector3.one;
                     var scale = Vector3.Lerp(source, target, Time.deltaTime * speed);
                     arrow.Shake.localScale = scale;
                 }

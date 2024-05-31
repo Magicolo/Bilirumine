@@ -142,7 +142,7 @@ public static class Utility
             Prompt = prompt,
             Stream = false,
             Temperature = 1f,
-            Tokens = 50,
+            Tokens = 100,
             TopK = 100,
             TopP = 0.95f
         });
@@ -154,7 +154,7 @@ public static class Utility
         var read = await response.Content.ReadAsStringAsync();
         Debug.Log($"OLLAMA: Received response '{read}'.");
         var result = JsonUtility.FromJson<GenerateResponse>(read);
-        return result.Response.Replace('\n', ' ').Replace('\r', ' ');
+        return result.Response.Replace('\n', ' ').Replace('\r', ' ').Replace('(', '<').Replace(')', '>');
     }
 
     public static bool Load(MemoryMappedFile memory, int width, int height, int offset, int size, ref Texture2D? texture)
@@ -204,7 +204,7 @@ public static class Utility
         {
             var area = new Rect(0f, 0f, icon.Width, icon.Height);
             arrow.Image.sprite = Sprite.Create(arrow.Texture, area, area.center);
-            arrow.Description = icon.Description;
+            arrow.Icon = icon;
             return true;
         }
         else

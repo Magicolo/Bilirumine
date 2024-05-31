@@ -203,7 +203,7 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
             yield None
             (sampled,) = sampler.sample(
                 seed=seed(),
-                steps=6,
+                steps=5,
                 cfg=1.0,
                 sampler_name="lcm",
                 scheduler="sgm_uniform",
@@ -307,7 +307,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
             ckpt_name="rife49.pth",
             frames=interpolated,
             clear_cache_after_n_frames=100,
-            multiplier=12,
+            multiplier=18,
             fast_mode=True,
             ensemble=True,
             scale_factor=1,
