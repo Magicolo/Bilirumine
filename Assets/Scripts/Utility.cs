@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.MemoryMappedFiles;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -18,17 +19,34 @@ public static class Utility
     [Serializable]
     public sealed record GenerateRequest
     {
+        [Serializable]
+        sealed record GenerateOptions
+        {
+            /// The temperature of the model. Increasing the temperature will make the model answer more creatively. (Default: 0.8) 	float 	temperature 
+            public float temperature;
+            /// Maximum number of tokens to predict when generating text. (Default: 128, -1 = infinite generation, -2 = fill context) 	int 	
+            public int num_predict;
+            /// Reduces the probability of generating nonsense. A higher value (e.g. 100) will give more diverse answers, while a lower value (e.g. 10) will be more conservative. (Default: 40) 	int 	
+            public int top_k;
+            /// Works together with top-k. A higher value (e.g., 0.95) will lead to more diverse text, while a lower value (e.g., 0.5) will generate more focused and conservative text. (Default: 0.9) 	float 	top_p 
+            public float top_p;
+        }
+
         public string Model { get => model; set => model = value; }
         public string Prompt { get => prompt; set => prompt = value; }
-        public int[] Context { get => context; set => context = value; }
         public bool Stream { get => stream; set => stream = value; }
+        public float Temperature { get => options.temperature; set => options.temperature = value; }
+        public int Tokens { get => options.num_predict; set => options.num_predict = value; }
+        public int TopK { get => options.top_k; set => options.top_k = value; }
+        public float TopP { get => options.top_p; set => options.top_p = value; }
 
         [SerializeField] string model = "";
         [SerializeField] string prompt = "";
-        [SerializeField] int[] context = Array.Empty<int>();
         [SerializeField] bool stream;
-
+        [SerializeField] GenerateOptions options = new();
     }
+
+
 
     [Serializable]
     public sealed record GenerateResponse
@@ -116,14 +134,17 @@ public static class Utility
         return (process, client);
     }
 
-    public static async Task<(string description, int[] context)> Generate(HttpClient client, string prompt, int[] context)
+    public static async Task<string> Generate(HttpClient client, string prompt)
     {
         var json = JsonUtility.ToJson(new GenerateRequest
         {
             Model = "phi3",
             Prompt = prompt,
-            Context = context,
             Stream = false,
+            Temperature = 1f,
+            Tokens = 50,
+            TopK = 100,
+            TopP = 0.95f
         });
         Debug.Log($"OLLAMA: Sending request '{json}'.");
         var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -133,7 +154,7 @@ public static class Utility
         var read = await response.Content.ReadAsStringAsync();
         Debug.Log($"OLLAMA: Received response '{read}'.");
         var result = JsonUtility.FromJson<GenerateResponse>(read);
-        return (result.Response.Replace('\n', ' ').Replace('\r', ' '), result.Context ?? Array.Empty<int>());
+        return result.Response.Replace('\n', ' ').Replace('\r', ' ');
     }
 
     public static bool Load(MemoryMappedFile memory, int width, int height, int offset, int size, ref Texture2D? texture)
@@ -184,12 +205,16 @@ public static class Utility
             var area = new Rect(0f, 0f, icon.Width, icon.Height);
             arrow.Image.sprite = Sprite.Create(arrow.Texture, area, area.center);
             arrow.Description = icon.Description;
-            arrow.Context = icon.Context;
             return true;
         }
         else
             return false;
     }
+
+    public static string Styles(params string[] styles) => Styles(1f, styles);
+    public static string Styles(float strength, params string[] styles) => Styles(styles.Select(style => (style, strength)));
+    public static string Styles(params (string style, float strength)[] styles) => Styles(styles.AsEnumerable());
+    public static string Styles(IEnumerable<(string style, float strength)> styles) => string.Join(" ", styles.Select(pair => pair.strength == 1f ? $"({pair.style})" : $"({pair.style}:{pair.strength})"));
 
     public static IEnumerable Wait(Task task)
     {

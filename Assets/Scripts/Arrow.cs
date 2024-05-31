@@ -41,14 +41,13 @@ public sealed class Arrow : MonoBehaviour
     [Header("Debug")]
     public float Time;
     public string? Description;
-    public int[]? Context;
     public Texture2D? Texture;
 
     public bool Idle => Time <= 0f;
-    public bool Preview => Moving && Time <= 3.75f;
+    public bool Preview => Moving && Time <= 2.5f;
     public bool Moving => Time > 0f;
-    public bool Chosen => Time >= 7.5f;
-    public bool Hidden => Context is null or { Length: 0 } || string.IsNullOrWhiteSpace(Description);
+    public bool Chosen => Time >= 5f;
+    public bool Hidden => string.IsNullOrWhiteSpace(Description);
 
     (float root, float socket) _offsets;
 
@@ -60,7 +59,7 @@ public sealed class Arrow : MonoBehaviour
         Content.transform.localScale = Content.transform.localScale.With(Sine2(1.5f, 0.06f, 0.8f, _offsets.socket));
     }
 
-    public void Hide() { Context = null; Description = null; Time = 0f; }
+    public void Hide() { Description = null; Time = 0f; }
 
     float Sine(float frequency, float amplitude, float center, float offset) =>
         Mathf.Sin(UnityEngine.Time.time * frequency + offset) * amplitude + center;

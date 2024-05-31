@@ -75,7 +75,7 @@ public sealed class Main : MonoBehaviour
         public int Offset;
         public int Size;
         public int Generation;
-        public int[]? Shape;
+        public (int width, int height) Shape;
         public int Left;
         public int Right;
         public int Bottom;
@@ -97,7 +97,7 @@ public sealed class Main : MonoBehaviour
         public State Map(Func<State, State> map) => map(Next is { } next ? this with { Next = next.Map(map) } : this);
 
         public override string ToString() =>
-            $@"{{""version"":{Version},""loop"":{(Loop ? "True" : "False")},""tags"":{(int)Tags},""width"":{Width},""height"":{Height},""offset"":{Offset},""size"":{Size},""generation"":{Generation},""shape"":[{string.Join(",", Shape ?? Array.Empty<int>())}],""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""steps"":{Steps},""guidance"":{Guidance},""denoise"":{Denoise},""full"":{(Full ? "True" : "False")},""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],""empty"":{(Empty ? "True" : "False")},""positive"":""{Escape(Positive)}"",""negative"":""{Escape(Negative)}"",""load"":""{Load}"",""next"":{Next?.ToString() ?? "None"}}}";
+            $@"{{""version"":{Version},""loop"":{(Loop ? "True" : "False")},""tags"":{(int)Tags},""width"":{Width},""height"":{Height},""offset"":{Offset},""size"":{Size},""generation"":{Generation},""shape"":({Shape.height}, {Shape.width}),""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""steps"":{Steps},""guidance"":{Guidance},""denoise"":{Denoise},""full"":{(Full ? "True" : "False")},""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],""empty"":{(Empty ? "True" : "False")},""positive"":""{Escape(Positive)}"",""negative"":""{Escape(Negative)}"",""load"":""{Load}"",""next"":{Next?.ToString() ?? "None"}}}";
     }
 
     public record Frame
@@ -123,7 +123,6 @@ public sealed class Main : MonoBehaviour
         public int Size;
         public Tags Tags;
         public string Description = "";
-        public int[] Context = Array.Empty<int>();
     }
 
     [Flags]
@@ -135,13 +134,15 @@ public sealed class Main : MonoBehaviour
         Right = 1 << 3,
         Up = 1 << 4,
         Down = 1 << 5,
-        Move = 1 << 6
+        Begin = 1 << 6,
+        End = 1 << 7,
+        Move = 1 << 8
     }
 
-    static readonly ((int width, int height) low, (int width, int height) medium, (int width, int height) high) _resolutions =
+    static readonly ((int width, int height) low, (int width, int height) high) _resolutions =
     (
         (640, 384),
-        (768, 512),
+        // (768, 512),
         (896, 640)
     );
 
@@ -159,6 +160,8 @@ public sealed class Main : MonoBehaviour
     Inputs _inputs = default;
     Frame _frame = new();
     bool _play = true;
+    int _begin;
+    int _end;
     (int stop, HashSet<int> set) _cancel = (0, new());
 
     IEnumerator Start()
@@ -171,7 +174,6 @@ public sealed class Main : MonoBehaviour
         yield return new WaitForSeconds(5f);
 
         var resolutions = (width: 0, height: 0);
-        var watch = Stopwatch.StartNew();
         var delta = (image: 0.1f, batch: 5f, wait: 0.1f, speed: 1f);
         var deltas = (
             images: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta.image))),
@@ -180,7 +182,7 @@ public sealed class Main : MonoBehaviour
         var icons = (
             arrows: new[] { Left, Right, Up, Down },
             queue: new ConcurrentQueue<Icon>(),
-            map: new ConcurrentDictionary<(int, Tags), (string description, int[] context)>());
+            map: new ConcurrentDictionary<(int version, Tags tags), string>());
         StartCoroutine(UpdateFrames());
         StartCoroutine(UpdateIcons());
         StartCoroutine(UpdateState());
@@ -270,57 +272,61 @@ Resolution: {resolutions.width}x{resolutions.height}";
             }
         }
 
+
         IEnumerator UpdateState()
         {
             var speed = 3.75f;
-            var context = Array.Empty<int>();
-            var styles = new[] { "ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant" };
-            var positive = $"({string.Join(", ", styles)}) Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.";
-            var negative = "(nude, naked, nudity, youth, child, children, blurry, worst quality, low detail)";
+            var styles = Utility.Styles("ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant");
+            var positive = $"{styles} Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.";
+            var negative = "nude, naked, nudity, youth, child, children, blurry, worst quality, low detail";
             var frame = new State()
             {
                 Tags = Tags.Frame,
                 Width = _resolutions.high.width,
                 Height = _resolutions.high.height,
                 Loop = true,
-                Steps = 6,
                 Zoom = 64,
+                Steps = 6,
                 Guidance = 5f,
                 Denoise = 0.55f,
-                Positive = positive,
                 Negative = negative,
                 Full = true,
             };
             var loop = WriteInput(version => frame with { Version = version, Empty = true, Positive = positive });
-            GenerateIcons(context, positive, negative);
+            GenerateIcons(0, positive, negative);
 
             var view = Canvas.LocalRectangle();
             var choice = (version: 0, positive, chosen: default(Arrow));
             while (true)
             {
                 var inputs = new[] { _inputs.Left.Take(), _inputs.Right.Take(), _inputs.Up.Take(), _inputs.Down.Take() };
-                UpdateIcon(Left, speed, 0, inputs, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8), context);
-                UpdateIcon(Right, speed, 1, inputs, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8), context);
-                UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8), context);
-                UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8), context);
+                UpdateIcon(Left, speed, 0, inputs, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
+                UpdateIcon(Right, speed, 1, inputs, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
+                UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
+                UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
-                if (_inputs.Space.Take()) GenerateIcons(context, positive, negative);
+                if (_inputs.Space.Take()) GenerateIcons(0, positive, negative);
                 switch ((choice.chosen, icons.arrows.FirstOrDefault(arrow => arrow.Moving)))
                 {
                     // Begin choice.
                     case (null, { } moving):
                         _play = false;
                         choice.chosen = moving;
-                        choice.positive = $"({string.Join(", ", styles)}, {moving.Color}) {moving.Description}";
+                        choice.positive = $"{styles} ({moving.Color}) {moving.Description}";
                         choice.version = WriteInput(version => State.Sequence(
                             frame with
                             {
                                 Version = version,
                                 Tags = frame.Tags | Tags.Move,
+                                Loop = false,
                                 Offset = _frame.Offset,
                                 Size = _frame.Size,
                                 Generation = _frame.Generation,
-                                Shape = new int[] { 1, _frame.Width, _frame.Height, 3 },
+                                Shape = (_frame.Width, _frame.Height),
+                                Width = _resolutions.low.width,
+                                Height = _resolutions.low.height,
+                                Steps = 6,
+                                Guidance = 5f,
                                 Denoise = 0.4f,
                                 Pause = new[] { loop },
                                 Left = Math.Max(-moving.Direction.x, 0),
@@ -328,14 +334,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
                                 Top = Math.Max(moving.Direction.y, 0),
                                 Bottom = Math.Max(-moving.Direction.y, 0),
                             },
-                            state => state with { Width = _resolutions.low.width, Height = _resolutions.low.height, Positive = $"{positive}" },
-                            state => state with { Width = _resolutions.low.width, Height = _resolutions.low.height, Positive = $"{positive}" },
-                            state => state with { Width = _resolutions.low.width, Height = _resolutions.low.height, Positive = $"{positive} {choice.positive}" },
-                            state => state with { Width = _resolutions.low.width, Height = _resolutions.low.height, Positive = $"{positive} {choice.positive}" },
-                            state => state with { Width = _resolutions.low.width, Height = _resolutions.low.height, Positive = $"{choice.positive} {positive}" },
-                            state => state with { Width = _resolutions.low.width, Height = _resolutions.low.height, Positive = $"{choice.positive} {positive}" },
-                            state => state with { Width = _resolutions.medium.width, Height = _resolutions.medium.height, Positive = $"{choice.positive}" },
-                            state => state with { Width = _resolutions.high.width, Height = _resolutions.high.height, Positive = $"{choice.positive}" },
+                            state => state with { Tags = state.Tags | Tags.Begin, Positive = $"{positive}" },
+                            state => state with { Positive = $"{positive}" },
+                            state => state with { Positive = $"{choice.positive}" },
+                            state => state with { Tags = state.Tags | Tags.End, Positive = $"{choice.positive}" },
                             _ => frame with { Version = version, Positive = $"{choice.positive}" }
                         ));
                         Debug.Log($"MAIN: Begin choice '{choice}' with frame '{_frame}'.");
@@ -347,24 +349,25 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         break;
                     // End choice.
                     case ({ Chosen: true } chosen, var moving) when chosen == moving:
-                        Debug.Log($"MAIN: End choice '{choice}'.");
-                        Flash.color = Flash.color.With(a: 1f);
-                        _play = true;
-                        _cancel.set.Add(loop);
-                        WriteInput(version => new() { Version = version, Cancel = new[] { loop } });
-                        loop = choice.version;
-                        positive = choice.positive;
-                        context = chosen.Context ?? Array.Empty<int>();
-                        choice = (0, positive, null);
-                        GenerateIcons(context, positive, negative);
-                        foreach (var arrow in icons.arrows) arrow.Hide();
+                        if (_begin >= choice.version)
+                        {
+                            Debug.Log($"MAIN: End choice '{choice}'.");
+                            Flash.color = Flash.color.With(a: 1f);
+                            _play = true;
+                            _cancel.set.Add(loop);
+                            WriteInput(version => new() { Version = version, Cancel = new[] { loop } });
+                            loop = choice.version;
+                            positive = choice.positive;
+                            choice = (0, positive, null);
+                            GenerateIcons(loop, positive, negative);
+                            foreach (var arrow in icons.arrows) arrow.Hide();
+                        }
                         break;
                     // Cancel choice.
                     case ({ } chosen, var moving) when chosen != moving:
                         Debug.Log($"MAIN: Cancel choice '{choice}'.");
                         _play = true;
                         _cancel.set.Add(choice.version);
-                        // Resume from the last non-cancelled frame in the buffer (or last shown frame if the buffer is empty).
                         WriteInput(version => new() { Version = version, Resume = new[] { loop }, Cancel = new[] { choice.version } });
                         choice = (0, positive, null);
                         break;
@@ -376,16 +379,18 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 yield return null;
             }
 
-            Task GenerateIcons(int[] context, string positive, string negative) => Task.WhenAll(icons.arrows.Select(async arrow =>
+            Task GenerateIcons(int end, string positive, string negative) => Task.WhenAll(icons.arrows.Select(async arrow =>
             {
                 var random = new System.Random();
-                var prompt = $"[Previous image description: {arrow.Description}] In a sequence of eccentric impromptu story telling images, write a short succinct summary description of maximum 10 words of the next wildly surreal impossible creative image with themes loosely related to the color '{arrow.Color}', that follows from the previous image description and including an exotic bizarre wonderful hipster visual style. Allow yourself to diverge creatively and explore niche subjects and visual styles. Your answer must strictly consist of an image description of maximum 10 words; nothing else; no salutation, no acknowledgement, no introduction; just the description.";
-                var pair = await Utility.Generate(ollama.client, prompt, context);
+                var prompt = $"Given this previous image description '{arrow.Description}', in a sequence of eccentric impromptu story telling images, write a short succinct summary description of maximum 25 words of the next wildly surreal impossible creative image with themes loosely related to the color '{arrow.Color}' and its vague connotations, that follows from the previous image description and including an exotic bizarre wonderful visual style. Allow yourself to diverge creatively and explore niche subjects and visual styles. Your answer must strictly consist of a visual style and an image description of maximum 25 words; nothing else; no salutation, no acknowledgement, no introduction; just the description.";
+                var description = await Utility.Generate(ollama.client, prompt);
+                while (_end < end) await Task.Delay(100);
+
                 WriteInput(version =>
                 {
                     var tags = Tags.Icon | arrow.Tags;
-                    var positive = $"(icon, close up, huge, simple, minimalistic, figurative, {arrow.Color}) {pair.description}";
-                    icons.map.TryAdd((version, tags), pair);
+                    var positive = $"(icon, close up, huge, simple, minimalistic, figurative, {arrow.Color}) {description}";
+                    icons.map.TryAdd((version, tags), description);
                     return new()
                     {
                         Version = version,
@@ -395,14 +400,14 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         Negative = negative,
                         Width = 384,
                         Height = 384,
-                        Steps = 5,
-                        Guidance = 5.75f,
+                        Steps = 6,
+                        Guidance = 5.5f,
                         Denoise = 0.65f,
                     };
                 });
             }));
 
-            void UpdateIcon(Arrow arrow, float speed, int index, bool[] inputs, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide, int[] context)
+            void UpdateIcon(Arrow arrow, float speed, int index, bool[] inputs, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
             {
                 var hidden = icons.arrows.Any(arrow => arrow.Hidden);
                 var move =
@@ -423,13 +428,13 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     arrow.Socket.Close.color = color;
                 }
                 {
-                    var random = inputs[index] ? new Vector3(Random.value, Random.value) * 2.5f : Vector3.zero;
+                    var random = inputs[index] ? new Vector3(Random.value, Random.value) * 3.75f : Vector3.zero;
                     var shake = random * Mathf.Clamp(arrow.Time - 2.5f, 0f, 5f);
                     arrow.Shake.anchoredPosition = shake;
                 }
                 {
                     var source = arrow.Shake.localScale;
-                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Pow(arrow.Time / 7.5f, 2f) : Vector3.one;
+                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time / 3.75f, 2f), 1.25f) : Vector3.one;
                     var scale = Vector3.Lerp(source, target, Time.deltaTime * speed);
                     arrow.Shake.localScale = scale;
                 }
@@ -449,6 +454,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
 
         async Task ReadOutput()
         {
+            var watch = Stopwatch.StartNew();
             var then = (image: watch.Elapsed, batch: watch.Elapsed);
             while (!comfy.HasExited)
             {
@@ -466,6 +472,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     var offset = int.Parse(splits[index++]);
                     var size = int.Parse(splits[index++]) / count;
                     var generation = int.Parse(splits[index++]);
+                    if (tags.HasFlag(Tags.Begin)) _begin = version;
+                    if (tags.HasFlag(Tags.End)) _end = version;
                     if (tags.HasFlag(Tags.Frame))
                     {
                         var frame = new Frame
@@ -493,7 +501,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             then.batch = now;
                         }
                     }
-                    if (icons.map.TryRemove((version, tags), out var pair))
+                    if (icons.map.TryRemove((version, tags), out var description))
                     {
                         var icon = new Icon
                         {
@@ -504,8 +512,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Offset = offset,
                             Size = size,
                             Tags = tags,
-                            Description = pair.description,
-                            Context = pair.context
+                            Description = description,
                         };
                         Debug.Log($"COMFY: Received icon: {icon}");
                         icons.queue.Enqueue(icon);

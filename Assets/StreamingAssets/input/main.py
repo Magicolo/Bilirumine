@@ -71,23 +71,32 @@ def clipped(name, prompt, clip, cache):
     return encoded
 
 
-def iterate(tasks: SimpleQueue):
-    global PAUSE, CANCEL
+def work(receive: SimpleQueue, steps):
+    global PAUSE, CANCEL, WAIT
 
-    for _ in range(tasks.qsize()):
-        (state, steps) = tasks.get()
-        while True:
-            if state["version"] in CANCEL:
-                break
-            elif state["version"] in PAUSE:
-                tasks.put((state, steps), block=False)
-                break
-            else:
-                output = next(steps)
-                if output is None:
-                    continue
-                yield output
-                break
+    tasks = SimpleQueue()
+    while True:
+        try:
+            wait = None if tasks.empty() else WAIT
+            (state, *inputs) = receive.get(block=True, timeout=wait)
+            tasks.put((state, inputs, steps(state, *inputs)), block=False)
+        except Empty:
+            pass
+
+        for _ in range(tasks.qsize()):
+            (state, inputs, task) = tasks.get(block=False)
+            while True:
+                if state["version"] in CANCEL:
+                    break
+                elif state["version"] in PAUSE:
+                    tasks.put((state, inputs, task), block=False)
+                    break
+                else:
+                    outputs = next(task)
+                    if outputs is None:
+                        continue
+                    yield state, inputs, outputs
+                    break
 
 
 def reserve(size: int):
@@ -107,18 +116,13 @@ def reserve(size: int):
 def load(state: dict, memory: mmap.mmap = None):
     global GENERATION
 
-    if (
-        state["size"]
-        and state["shape"]
-        and state["generation"] == GENERATION
-        and memory
-    ):
+    if state["size"] and state["generation"] == GENERATION and memory:
         memory.seek(state["offset"])
         data = memory.read(state["size"])
         loaded = torch.frombuffer(data, dtype=torch.uint8)
         loaded = loaded.to(dtype=torch.float32)
         loaded = loaded / 255.0
-        loaded = loaded.reshape(state["shape"], 3)
+        loaded = loaded.reshape(1, *state["shape"], 3)
     elif state["load"]:
         (loaded, _) = LoadImage().load_image(state["load"])
     elif state["empty"]:
@@ -154,7 +158,7 @@ def read(send):
                     send.put((state, loaded), block=False)
 
 
-def extend(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
+def extend(receive: SimpleQueue, send: SimpleQueue):
     def steps(state, loaded):
         yield None
         # Apply random variation to outpaint to reduce recurring patterns.
@@ -164,7 +168,7 @@ def extend(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
         bottom = nudge(state["bottom"], 0.25)
         zoom = nudge(state["zoom"], 0.25)
         (scaled,) = scaler.upscale(
-            loaded, "nearest-exact", state["width"], state["height"], "disabled"
+            loaded, "bicubic", state["width"], state["height"], "disabled"
         )
 
         if zoom > 0 or left > 0 or top > 0 or right > 0 or bottom > 0:
@@ -199,10 +203,10 @@ def extend(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
             yield None
             (sampled,) = sampler.sample(
                 seed=seed(),
-                steps=1,
+                steps=6,
                 cfg=1.0,
                 sampler_name="lcm",
-                scheduler="simple",
+                scheduler="sgm_uniform",
                 denoise=1.0,
                 model=state["model"],
                 positive=positive,
@@ -217,7 +221,7 @@ def extend(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
 
         if zoom > 0:
             (zoomed,) = scaler.upscale(
-                decoded, "nearest-exact", state["width"], state["height"], "disabled"
+                decoded, "bicubic", state["width"], state["height"], "disabled"
             )
             yield None
         else:
@@ -233,27 +237,15 @@ def extend(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
         padder = ImagePadForOutpaint()
         scaler = ImageScale()
         sampler = KSampler()
-        while True:
-            try:
-                wait = None if tasks.empty() else WAIT
-                (state, loaded) = receive.get(block=True, timeout=wait)
-                tasks.put((state, steps(state, loaded)), block=False)
-            except Empty:
-                pass
-
-            for scaled, zoomed in iterate(tasks):
-                send.put((state, scaled, zoomed), block=False)
+        for state, _, (scaled, zoomed) in work(receive, steps):
+            send.put((state, scaled, zoomed), block=False)
 
 
 def detail(
-    receive: SimpleQueue,
-    send: SimpleQueue,
-    loop: SimpleQueue,
-    end: SimpleQueue,
-    tasks: SimpleQueue,
+    receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue, end: SimpleQueue
 ):
 
-    def steps(state: dict, scaled, zoomed):
+    def steps(state: dict, _, zoomed):
         yield None
         (positive,) = clipper.encode(text=state["positive"], clip=state["clip"])
         yield None
@@ -275,36 +267,28 @@ def detail(
         )
         yield None
         (decoded,) = decoder.decode(samples=sampled, vae=state["vae"])
-        yield decoded
+        yield (decoded,)
 
     with torch.inference_mode():
         clipper = CLIPTextEncode()
         encoder = VAEEncode()
         decoder = VAEDecode()
         sampler = KSampler()
-        while True:
-            try:
-                wait = None if tasks.empty() else WAIT
-                (state, scaled, zoomed) = receive.get(block=True, timeout=wait)
-                tasks.put((state, steps(state, scaled, zoomed)), block=False)
-            except Empty:
-                pass
+        for state, (scaled, _), (decoded,) in work(receive, steps):
+            if state["full"]:
+                send.put((state, scaled, decoded), block=False)
+            else:
+                end.put((state, decoded), block=False)
 
-            for decoded in iterate(tasks):
-                if state["full"]:
-                    send.put((state, scaled, decoded), block=False)
-                else:
-                    end.put((state, decoded), block=False)
-
-                if state["next"]:
-                    next = {**state, **state["next"]}
-                    loaded = load(next)
-                    loop.put((next, decoded if loaded is None else loaded), block=False)
-                elif state["loop"]:
-                    loop.put((state, decoded), block=False)
+            if state["next"]:
+                next = {**state, **state["next"]}
+                loaded = load(next)
+                loop.put((next, decoded if loaded is None else loaded), block=False)
+            elif state["loop"]:
+                loop.put((state, decoded), block=False)
 
 
-def interpolate(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
+def interpolate(receive: SimpleQueue, send: SimpleQueue):
     def steps(state, scaled, decoded):
         yield None
         (batched,) = batcher.batch(scaled, decoded)
@@ -313,7 +297,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
             ckpt_name="rife49.pth",
             frames=batched,
             clear_cache_after_n_frames=100,
-            multiplier=8,
+            multiplier=6,
             fast_mode=True,
             ensemble=True,
             scale_factor=0.25,
@@ -323,29 +307,21 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue, tasks: SimpleQueue):
             ckpt_name="rife49.pth",
             frames=interpolated,
             clear_cache_after_n_frames=100,
-            multiplier=8,
+            multiplier=12,
             fast_mode=True,
             ensemble=True,
             scale_factor=1,
         )
-        yield images
+        yield (images,)
 
     with torch.inference_mode():
         batcher = ImageBatch()
         interpolator = NODE_CLASS_MAPPINGS["RIFE VFI"]()
-        while True:
-            try:
-                wait = None if tasks.empty() else WAIT
-                (state, scaled, decoded) = receive.get(block=True, timeout=wait)
-                tasks.put((state, steps(state, scaled, decoded)), block=False)
-            except Empty:
-                pass
-
-            for images in iterate(tasks):
-                send.put((state, images[1:]), block=False)
+        for state, _, (images,) in work(receive, steps):
+            send.put((state, images[1:]), block=False)
 
 
-def write(receive: SimpleQueue, tasks: SimpleQueue):
+def write(receive: SimpleQueue):
 
     def steps(state, images):
         yield None
@@ -371,21 +347,13 @@ def write(receive: SimpleQueue, tasks: SimpleQueue):
         )
         yield None
         torch.cuda.empty_cache()
-        yield True
+        yield (True,)
 
     with open(MEMORY, "r+b") as file:
         with mmap.mmap(file.fileno(), CAPACITY, access=mmap.ACCESS_WRITE) as memory:
             with torch.inference_mode():
-                while True:
-                    try:
-                        wait = None if tasks.empty() else WAIT
-                        (state, images) = receive.get(block=True, timeout=wait)
-                        tasks.put((state, steps(state, images)), block=False)
-                    except Empty:
-                        pass
-
-                    for _ in iterate(tasks):
-                        pass
+                for _, _, _ in work(receive, steps):
+                    pass
 
 
 WAIT = 0.1
@@ -413,10 +381,10 @@ c = SimpleQueue()
 d = SimpleQueue()
 threads = [
     threading.Thread(target=read, args=(a,)),
-    threading.Thread(target=extend, args=(a, b, SimpleQueue())),
-    threading.Thread(target=detail, args=(b, c, a, d, SimpleQueue())),
-    threading.Thread(target=interpolate, args=(c, d, SimpleQueue())),
-    threading.Thread(target=write, args=(d, SimpleQueue())),
+    threading.Thread(target=extend, args=(a, b)),
+    threading.Thread(target=detail, args=(b, c, a, d)),
+    threading.Thread(target=interpolate, args=(c, d)),
+    threading.Thread(target=write, args=(d,)),
 ]
 for thread in threads:
     thread.start()

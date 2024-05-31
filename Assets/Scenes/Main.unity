@@ -311,7 +311,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Direction.x
-      value: 128
+      value: 192
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Themes.Array.size
@@ -570,7 +570,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Direction.y
-      value: 96
+      value: 128
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Themes.Array.size
@@ -988,7 +988,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Direction.y
-      value: -96
+      value: -128
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Themes.Array.size
@@ -1306,7 +1306,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Direction.x
-      value: -128
+      value: -192
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Themes.Array.size
