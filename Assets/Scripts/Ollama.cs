@@ -84,15 +84,18 @@ public static class Ollama
             TopK = 100,
             TopP = 0.95f
         });
-        Debug.Log($"OLLAMA: Sending request '{json}'.");
+        Log($"Sending request '{json}'.");
         var content = new StringContent(json, Encoding.UTF8, "application/json");
         var request = new HttpRequestMessage(HttpMethod.Post, "api/generate") { Content = content };
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
         var read = await response.Content.ReadAsStringAsync();
-        Debug.Log($"OLLAMA: Received response '{read}'.");
+        Log($"Received response '{read}'.");
         var result = JsonUtility.FromJson<GenerateResponse>(read);
         return result.Response.Replace('\n', ' ').Replace('\r', ' ').Replace('(', '<').Replace(')', '>');
     }
 
+    public static void Log(string message) => Debug.Log($"OLLAMA: {message}");
+    public static void Warn(string message) => Debug.LogWarning($"OLLAMA: {message}");
+    public static void Error(string message) => Debug.LogError($"OLLAMA: {message}");
 }

@@ -1,6 +1,5 @@
 #nullable enable
 
-using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -13,10 +12,11 @@ using Debug = UnityEngine.Debug;
 
 public static class Utility
 {
-    public static MemoryMappedFile Memory(string extension)
+    public static MemoryMappedFile Memory(string name)
     {
-        var path = $"/dev/shm/bilirumine.{extension}";
-        var memory = MemoryMappedFile.CreateFromFile(path, FileMode.OpenOrCreate, $"bilirumine.{extension}", int.MaxValue, MemoryMappedFileAccess.ReadWrite);
+        var file = $"bilirumine_{name}";
+        var path = $"/dev/shm/{file}";
+        var memory = MemoryMappedFile.CreateFromFile(path, FileMode.OpenOrCreate, file, int.MaxValue, MemoryMappedFileAccess.ReadWrite);
         Application.quitting += () => { try { memory.Dispose(); } catch { } };
         Application.quitting += () => { try { File.Delete(path); } catch { } };
         return memory;

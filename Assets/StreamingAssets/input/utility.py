@@ -61,7 +61,7 @@ def work(receive: SimpleQueue, steps):
 
 def memory(name: str, access: int):
     global CAPACITY
-    with open(f"/dev/shm/bilirumine.{name}", "r+b") as file:
+    with open(f"/dev/shm/bilirumine_{name}", "r+b") as file:
         return mmap.mmap(file.fileno(), CAPACITY, access=access)
 
 

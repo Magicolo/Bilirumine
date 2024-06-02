@@ -1,4 +1,5 @@
-import asyncio, sys, ast, threading, torch, asyncio, mmap, utility
+import asyncio, sys, threading, torch, asyncio, mmap, utility
+from typing import Optional
 from queue import SimpleQueue
 
 sys.path.append("/comfy")
@@ -19,7 +20,7 @@ from nodes import (
 )
 
 
-def load(state: dict, memory: mmap.mmap = None):
+def load(state: dict, memory: Optional[mmap.mmap] = None):
     if memory and state["size"] and state["generation"]:
         data = utility.read(memory, state["offset"], state["size"], state["generation"])
         loaded = torch.frombuffer(data, dtype=torch.uint8)
@@ -35,8 +36,8 @@ def load(state: dict, memory: mmap.mmap = None):
     return loaded
 
 
-def read(send):
-    with utility.memory("comfy", mmap.ACCESS_READ) as memory, torch.inference_mode():
+def read(send: SimpleQueue):
+    with utility.memory("image", mmap.ACCESS_READ) as memory, torch.inference_mode():
         (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
             "dreamshaperXL_v21TurboDPMSDE.safetensors"
         )
@@ -180,7 +181,7 @@ def detail(
 
 
 def interpolate(receive: SimpleQueue, send: SimpleQueue):
-    def steps(state, scaled, decoded):
+    def steps(_, scaled, decoded):
         yield None
         (batched,) = batcher.batch(scaled, decoded)
         yield None
@@ -213,7 +214,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
 
 
 def write(receive: SimpleQueue):
-    def steps(state, images):
+    def steps(_, images):
         yield None
         [count, height, width, _] = images.shape
         images = images * 255.0
@@ -226,12 +227,12 @@ def write(receive: SimpleQueue):
         yield None
         data = images.tobytes()
         yield None
-        offset, size, generation = utility.write(memory, offset, data)
+        offset, size, generation = utility.write(memory, data)
         yield None
         torch.cuda.empty_cache()
         yield (width, height, count, offset, size, generation)
 
-    with utility.memory("comfy", mmap.ACCESS_WRITE) as memory, torch.inference_mode():
+    with utility.memory("image", mmap.ACCESS_WRITE) as memory, torch.inference_mode():
         for state, _, outputs in utility.work(receive, steps):
             (width, height, count, offset, size, generation) = outputs
             utility.output(

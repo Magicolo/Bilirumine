@@ -1,10 +1,14 @@
 #nullable enable
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 using Debug = UnityEngine.Debug;
@@ -13,6 +17,10 @@ public static class Comfy
 {
     public sealed record State
     {
+        static int _version = 0;
+
+        public static int Reserve() => Interlocked.Increment(ref _version);
+
         public static State? Sequence(IEnumerable<State> states)
         {
             var first = default(State);
@@ -58,8 +66,7 @@ public static class Comfy
 
         public State Map(Func<State, State> map) => map(Next is { } next ? this with { Next = next.Map(map) } : this);
 
-        public override string ToString() =>
-            $@"{{""version"":{Version},""loop"":{(Loop ? "True" : "False")},""tags"":{(int)Tags},""width"":{Width},""height"":{Height},""offset"":{Offset},""size"":{Size},""generation"":{Generation},""shape"":({Shape.height}, {Shape.width}),""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""steps"":{Steps},""guidance"":{Guidance},""denoise"":{Denoise},""full"":{(Full ? "True" : "False")},""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],""empty"":{(Empty ? "True" : "False")},""positive"":""{Escape(Positive)}"",""negative"":""{Escape(Negative)}"",""load"":""{Load}"",""next"":{Next?.ToString() ?? "None"}}}";
+        public override string ToString() => $@"{{""version"":{Version},""loop"":{(Loop ? "True" : "False")},""tags"":{(int)Tags},""width"":{Width},""height"":{Height},""offset"":{Offset},""size"":{Size},""generation"":{Generation},""shape"":({Shape.height}, {Shape.width}),""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""steps"":{Steps},""guidance"":{Guidance},""denoise"":{Denoise},""full"":{(Full ? "True" : "False")},""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],""empty"":{(Empty ? "True" : "False")},""positive"":""{Escape(Positive)}"",""negative"":""{Escape(Negative)}"",""load"":""{Load}"",""next"":{Next?.ToString() ?? "None"}}}";
     }
 
     public record Frame
@@ -100,7 +107,7 @@ public static class Comfy
         End = 1 << 7,
         Move = 1 << 8
     }
-    public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("comfy"), Utility.Memory("comfy"));
+    public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("comfy"), Utility.Memory("image"));
 
     public static bool Load(this MemoryMappedFile memory, int width, int height, int offset, int size, ref Texture2D? texture)
     {
@@ -117,11 +124,10 @@ public static class Comfy
                     access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
                     if (pointer == null)
                     {
-                        Debug.LogError("Failed to acquire pointer to shared memory.");
+                        Error("Failed to acquire pointer to shared memory.");
                         return false;
                     }
-                    var source = (IntPtr)(pointer + offset);
-                    texture.LoadRawTextureData(source, size);
+                    texture.LoadRawTextureData((IntPtr)(pointer + offset), size);
                 }
                 finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
             }
@@ -157,6 +163,20 @@ public static class Comfy
         else
             return false;
     }
+
+    public static int Write(Process process, Func<int, State> get)
+    {
+        var version = State.Reserve();
+        var state = get(version);
+        Log($"Sending input '{state}'.");
+        process.StandardInput.WriteLine($"{state}");
+        process.StandardInput.Flush();
+        return version;
+    }
+
+    public static void Log(string message) => Debug.Log($"COMFY: {message}");
+    public static void Warn(string message) => Debug.LogWarning($"COMFY: {message}");
+    public static void Error(string message) => Debug.LogError($"COMFY: {message}");
 
     public static string Styles(params string[] styles) => Styles(1f, styles);
     public static string Styles(float strength, params string[] styles) => Styles(styles.Select(style => (style, strength)));

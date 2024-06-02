@@ -17,7 +17,7 @@ services:
       - ./input:/input
       - ~/Projects/ai/comfy/Comfy:/comfy
       - comfy:/root/.cache
-    entrypoint: python /input/comfy.py
+    entrypoint: python /input/image.py
     deploy:
       resources:
         reservations:
@@ -33,7 +33,7 @@ services:
       - ./input:/input
       - ~/Projects/ai/audiocraft/audiocraft:/audiocraft
       - audiocraft:/root/.cache
-    entrypoint: python /input/audiocraft.py
+    entrypoint: python /input/audio.py
     deploy:
       resources:
         reservations:

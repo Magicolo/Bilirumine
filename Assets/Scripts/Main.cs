@@ -50,14 +50,11 @@ public struct Inputs
 
 public sealed class Main : MonoBehaviour
 {
-
     static readonly ((int width, int height) low, (int width, int height) high) _resolutions =
     (
         (768, 512),
         (896, 640)
     );
-
-    static int _version = 0;
 
     public RectTransform Canvas = default!;
     public Arrow Left = default!;
@@ -73,12 +70,12 @@ public sealed class Main : MonoBehaviour
     bool _play = true;
     int _begin;
     int _end;
-    (int stop, HashSet<int> set) _cancel = (0, new());
+    readonly HashSet<int> _cancel = new();
 
     IEnumerator Start()
     {
         var comfy = Comfy.Create();
-        // var audiocraft = Audiocraft.Create();
+        var audiocraft = Audiocraft.Create();
         var ollama = Ollama.Create();
         yield return new WaitForSeconds(5f);
 
@@ -92,13 +89,14 @@ public sealed class Main : MonoBehaviour
             arrows: new[] { Left, Right, Up, Down },
             queue: new ConcurrentQueue<Comfy.Icon>(),
             map: new ConcurrentDictionary<(int version, Comfy.Tags tags), string>());
+        var clips = new ConcurrentQueue<Audiocraft.Clip>();
         StartCoroutine(UpdateFrames());
         StartCoroutine(UpdateIcons());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateDebug());
 
-        foreach (var item in Utility.Wait(ReadOutput()))
+        foreach (var item in Utility.Wait(ReadOutput(), Audiocraft.Read(audiocraft.process, clips)))
         {
             Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
             Cursor.visible = Application.isEditor;
@@ -114,8 +112,8 @@ public sealed class Main : MonoBehaviour
             {
                 if (_play && frames.TryDequeue(out var frame))
                 {
-                    if (Valid(frame)) _frame = frame;
-                    else continue;
+                    if (_cancel.Contains(frame.Version)) continue;
+                    else _frame = frame;
 
                     while (Time.time - time < delta.wait / delta.speed) yield return null;
                     time += delta.wait / delta.speed;
@@ -129,8 +127,6 @@ public sealed class Main : MonoBehaviour
                 yield return null;
             }
         }
-
-        bool Valid(Comfy.Frame frame) => frame.Version >= _cancel.stop && !_cancel.set.Contains(frame.Version);
 
         IEnumerator UpdateIcons()
         {
@@ -201,7 +197,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Negative = negative,
                 Full = true,
             };
-            var loop = WriteInput(version => frame with { Version = version, Empty = true, Positive = positive });
+            var loop = Comfy.Write(comfy.process, version => frame with { Version = version, Empty = true, Positive = positive });
             GenerateIcons(0, positive, negative);
 
             var view = Canvas.LocalRectangle();
@@ -223,7 +219,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         _play = false;
                         choice.chosen = moving;
                         choice.positive = $"{styles} ({moving.Color}) {icon.Description}";
-                        choice.version = WriteInput(version => Comfy.State.Sequence(
+                        choice.version = Comfy.Write(comfy.process, version => Comfy.State.Sequence(
                             frame with
                             {
                                 Version = version,
@@ -264,8 +260,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Debug.Log($"MAIN: End choice '{choice}'.");
                             Flash.color = Flash.color.With(a: 1f);
                             _play = true;
-                            _cancel.set.Add(loop);
-                            WriteInput(version => new() { Version = version, Cancel = new[] { loop } });
+                            _cancel.Add(loop);
+                            Comfy.Write(comfy.process, version => new() { Version = version, Cancel = new[] { loop } });
                             loop = choice.version;
                             positive = choice.positive;
                             choice = (0, positive, null);
@@ -277,8 +273,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     case ({ } chosen, var moving) when chosen != moving:
                         Debug.Log($"MAIN: Cancel choice '{choice}'.");
                         _play = true;
-                        _cancel.set.Add(choice.version);
-                        WriteInput(version => new() { Version = version, Resume = new[] { loop }, Cancel = new[] { choice.version } });
+                        _cancel.Add(choice.version);
+                        Comfy.Write(comfy.process, version => new() { Version = version, Resume = new[] { loop }, Cancel = new[] { choice.version } });
                         choice = (0, positive, null);
                         break;
                     case (null, null):
@@ -305,7 +301,7 @@ Your answer must strictly consist of visual styles and an image description of m
                 var description = await ollama.client.Generate(prompt);
                 while (_end < end) await Task.Delay(100);
 
-                WriteInput(version =>
+                Comfy.Write(comfy.process, version =>
                 {
                     var tags = Comfy.Tags.Icon | arrow.Tags;
                     var positive = $"(icon, close up, huge, simple, minimalistic, figurative, {arrow.Color}) {description}";
@@ -331,7 +327,6 @@ Your answer must strictly consist of visual styles and an image description of m
                 var hidden = icons.arrows.Any(arrow => arrow.Hidden);
                 var move =
                     inputs[index] &&
-                    // (inputs[index] || arrow.Preview) &&
                     inputs.Enumerate().All(pair => pair.index == index || !pair.item) &&
                     icons.arrows.All(other => arrow == other || other.Idle);
                 {
@@ -362,16 +357,6 @@ Your answer must strictly consist of visual styles and an image description of m
             }
         }
 
-        int WriteInput(Func<int, Comfy.State> get)
-        {
-            var version = Interlocked.Increment(ref _version);
-            var state = get(_version);
-            Debug.Log($"COMFY: Sending input '{state}'.");
-            comfy.process.StandardInput.WriteLine($"{state}");
-            comfy.process.StandardInput.Flush();
-            return version;
-        }
-
         async Task ReadOutput()
         {
             var watch = Stopwatch.StartNew();
@@ -382,8 +367,8 @@ Your answer must strictly consist of visual styles and an image description of m
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 try
                 {
-                    var splits = line.Split(",", StringSplitOptions.None);
                     var index = 0;
+                    var splits = line.Split(",", StringSplitOptions.None);
                     var version = int.Parse(splits[index++]);
                     var tags = (Comfy.Tags)int.Parse(splits[index++]);
                     var width = int.Parse(splits[index++]);
@@ -406,7 +391,7 @@ Your answer must strictly consist of visual styles and an image description of m
                             Size = size,
                             Tags = tags,
                         };
-                        Debug.Log($"COMFY: Received frame: {frame}");
+                        Comfy.Log($"Received frame: {frame}");
                         for (int i = 0; i < count; i++, offset += size)
                         {
                             frames.Enqueue(frame with { Index = i, Offset = offset });
@@ -434,12 +419,12 @@ Your answer must strictly consist of visual styles and an image description of m
                             Tags = tags,
                             Description = description,
                         };
-                        Debug.Log($"COMFY: Received icon: {icon}");
+                        Comfy.Log($"Received icon: {icon}");
                         icons.queue.Enqueue(icon);
                     }
                 }
-                catch (FormatException) { Debug.LogWarning($"COMFY: {line}"); }
-                catch (IndexOutOfRangeException) { Debug.LogWarning($"COMFY: {line}"); }
+                catch (FormatException) { Comfy.Warn(line); }
+                catch (IndexOutOfRangeException) { Comfy.Warn(line); }
                 catch (Exception exception) { Debug.LogException(exception); }
             }
         }
