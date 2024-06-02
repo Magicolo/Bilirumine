@@ -8,6 +8,7 @@ Builds/
 UserSettings/
 Assets/StreamingAssets/**/*.meta
 Assets/TextMesh Pro*
+**/__pycache__/
 **/Comfy/output/
 **/Comfy/graph.json*
 *.sln

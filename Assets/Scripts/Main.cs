@@ -16,8 +16,8 @@ using System.Collections.Generic;
 
 /*
     TODO
-    - Can I run a comfy instance on the CPU?
     - Make the prompt LLM generate more diverse visual styles and subjects.
+        - List hundreds of color-inspired subjects/environments/themes/styles with GPT4 and choose 3 randomly to direct the prompt.
     - Add a visual indication that motion is happening.
     - Communicate that the button must be held for a direction to be taken.
     - Add music generated on udio.
@@ -31,114 +31,25 @@ using System.Collections.Generic;
     - After navigating with icons a few times, sometimes the chosen icon never resolves (remains stuck in full shake).
     - Sometimes, icons remain black (with some noise).
 */
+public struct Inputs
+{
+    public bool Left;
+    public bool Right;
+    public bool Up;
+    public bool Down;
+    public bool Plus;
+    public bool Minus;
+    public bool Tab;
+    public bool Shift;
+    public bool Space;
+    public bool _1;
+    public bool _2;
+    public bool _3;
+    public bool _4;
+}
+
 public sealed class Main : MonoBehaviour
 {
-    public struct Inputs
-    {
-        public bool Left;
-        public bool Right;
-        public bool Up;
-        public bool Down;
-        public bool Plus;
-        public bool Minus;
-        public bool Tab;
-        public bool Shift;
-        public bool Space;
-        public bool _1;
-        public bool _2;
-        public bool _3;
-        public bool _4;
-    }
-
-    public sealed record State
-    {
-        public static State? Sequence(IEnumerable<State> states)
-        {
-            var first = default(State);
-            var previous = default(State);
-            foreach (var current in states)
-            {
-                if (first is null || previous is null) (first, previous) = (current, current);
-                else { previous.Next = current; previous = current; }
-            }
-            return first;
-        }
-        public static State? Sequence(params State[] states) => Sequence(states.AsEnumerable());
-        public static State Sequence(State state, params Func<State, State>[] maps) => Sequence(maps.Select(map => map(state)))!;
-
-        static string? Escape(string? value) => value?.Replace(@"""", @"\""");
-
-        public int Version;
-        public bool Loop;
-        public Tags Tags;
-        public int Width;
-        public int Height;
-        public int Offset;
-        public int Size;
-        public int Generation;
-        public (int width, int height) Shape;
-        public int Left;
-        public int Right;
-        public int Bottom;
-        public int Top;
-        public int Zoom;
-        public int Steps;
-        public float Guidance;
-        public float Denoise;
-        public bool Full;
-        public int[]? Cancel;
-        public int[]? Pause;
-        public int[]? Resume;
-        public string? Load;
-        public bool Empty;
-        public string? Positive;
-        public string? Negative;
-        public State? Next;
-
-        public State Map(Func<State, State> map) => map(Next is { } next ? this with { Next = next.Map(map) } : this);
-
-        public override string ToString() =>
-            $@"{{""version"":{Version},""loop"":{(Loop ? "True" : "False")},""tags"":{(int)Tags},""width"":{Width},""height"":{Height},""offset"":{Offset},""size"":{Size},""generation"":{Generation},""shape"":({Shape.height}, {Shape.width}),""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""steps"":{Steps},""guidance"":{Guidance},""denoise"":{Denoise},""full"":{(Full ? "True" : "False")},""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],""empty"":{(Empty ? "True" : "False")},""positive"":""{Escape(Positive)}"",""negative"":""{Escape(Negative)}"",""load"":""{Load}"",""next"":{Next?.ToString() ?? "None"}}}";
-    }
-
-    public record Frame
-    {
-        public int Version;
-        public int Generation;
-        public int Index;
-        public int Count;
-        public int Width;
-        public int Height;
-        public int Offset;
-        public int Size;
-        public Tags Tags;
-    }
-
-    public record Icon
-    {
-        public int Version;
-        public int Generation;
-        public int Width;
-        public int Height;
-        public int Offset;
-        public int Size;
-        public Tags Tags;
-        public string Description = "";
-    }
-
-    [Flags]
-    public enum Tags
-    {
-        Frame = 1 << 0,
-        Icon = 1 << 1,
-        Left = 1 << 2,
-        Right = 1 << 3,
-        Up = 1 << 4,
-        Down = 1 << 5,
-        Begin = 1 << 6,
-        End = 1 << 7,
-        Move = 1 << 8
-    }
 
     static readonly ((int width, int height) low, (int width, int height) high) _resolutions =
     (
@@ -158,7 +69,7 @@ public sealed class Main : MonoBehaviour
     public TMP_Text Statistics = default!;
 
     Inputs _inputs = default;
-    Frame _frame = new();
+    Comfy.Frame _frame = new();
     bool _play = true;
     int _begin;
     int _end;
@@ -166,11 +77,9 @@ public sealed class Main : MonoBehaviour
 
     IEnumerator Start()
     {
-        using var memory = Utility.Memory();
-        using var comfy = Utility.Docker("comfy");
-        var ollama = Utility.Ollama();
-        using var __ = ollama.process;
-        using var ___ = ollama.client;
+        var comfy = Comfy.Create();
+        // var audiocraft = Audiocraft.Create();
+        var ollama = Ollama.Create();
         yield return new WaitForSeconds(5f);
 
         var resolutions = (width: 0, height: 0);
@@ -178,11 +87,11 @@ public sealed class Main : MonoBehaviour
         var deltas = (
             images: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta.image))),
             batches: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 5).Select(_ => TimeSpan.FromSeconds(delta.batch))));
-        var frames = new ConcurrentQueue<Frame>();
+        var frames = new ConcurrentQueue<Comfy.Frame>();
         var icons = (
             arrows: new[] { Left, Right, Up, Down },
-            queue: new ConcurrentQueue<Icon>(),
-            map: new ConcurrentDictionary<(int version, Tags tags), string>());
+            queue: new ConcurrentQueue<Comfy.Icon>(),
+            map: new ConcurrentDictionary<(int version, Comfy.Tags tags), string>());
         StartCoroutine(UpdateFrames());
         StartCoroutine(UpdateIcons());
         StartCoroutine(UpdateState());
@@ -210,7 +119,7 @@ public sealed class Main : MonoBehaviour
 
                     while (Time.time - time < delta.wait / delta.speed) yield return null;
                     time += delta.wait / delta.speed;
-                    if (Utility.Load(memory, Output, frame, ref load))
+                    if (comfy.memory.Load(Output, frame, ref load))
                     {
                         (main, load) = (load, main);
                         resolutions = (frame.Width, frame.Height);
@@ -221,7 +130,7 @@ public sealed class Main : MonoBehaviour
             }
         }
 
-        bool Valid(Frame frame) => frame.Version >= _cancel.stop && !_cancel.set.Contains(frame.Version);
+        bool Valid(Comfy.Frame frame) => frame.Version >= _cancel.stop && !_cancel.set.Contains(frame.Version);
 
         IEnumerator UpdateIcons()
         {
@@ -229,7 +138,7 @@ public sealed class Main : MonoBehaviour
             {
                 if (icons.queue.TryDequeue(out var icon))
                     foreach (var arrow in icons.arrows)
-                        Utility.Load(memory, arrow, icon);
+                        comfy.memory.Load(arrow, icon);
                 yield return null;
             }
         }
@@ -276,12 +185,12 @@ Resolution: {resolutions.width}x{resolutions.height}";
         IEnumerator UpdateState()
         {
             var speed = 3.75f;
-            var styles = Utility.Styles("ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant");
-            var positive = $"{styles} Everything is a 'TCHOO TCHOO' train. Flesh organic locomotive speeding on vast empty nebula tracks. Eternal spiral railways in the cosmos. Coal ember engine of intricate fusion. Unholy desecrated church station. Runic glyphs neon 'TCHOO' engravings. Darkness engulfed black hole pentagram. Blood magic eldritch rituals to summon whimsy hellish trains of wonder. Everything is a 'TCHOO TCHOO' train.";
-            var negative = Utility.Styles("nude", "naked", "nudity", "youth", "child", "children", "blurry", "worst quality", "low detail");
-            var frame = new State()
+            var styles = Comfy.Styles("ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant");
+            var positive = $"void";
+            var negative = Comfy.Styles("nude", "naked", "nudity", "youth", "child", "children", "blurry", "worst quality", "low detail");
+            var frame = new Comfy.State()
             {
-                Tags = Tags.Frame,
+                Tags = Comfy.Tags.Frame,
                 Width = _resolutions.high.width,
                 Height = _resolutions.high.height,
                 Loop = true,
@@ -305,6 +214,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
                 UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
+                AudioClip.Create("A", 80000, 1, 16000, true, samples => { });
                 if (_inputs.Space.Take()) GenerateIcons(0, positive, negative);
                 switch ((choice.chosen, icons.arrows.FirstOrDefault(arrow => arrow.Moving)))
                 {
@@ -313,11 +223,11 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         _play = false;
                         choice.chosen = moving;
                         choice.positive = $"{styles} ({moving.Color}) {icon.Description}";
-                        choice.version = WriteInput(version => State.Sequence(
+                        choice.version = WriteInput(version => Comfy.State.Sequence(
                             frame with
                             {
                                 Version = version,
-                                Tags = frame.Tags | Tags.Move,
+                                Tags = frame.Tags | Comfy.Tags.Move,
                                 Loop = false,
                                 Offset = _frame.Offset,
                                 Size = _frame.Size,
@@ -334,10 +244,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
                                 Top = Math.Max(moving.Direction.y, 0),
                                 Bottom = Math.Max(-moving.Direction.y, 0),
                             },
-                            state => state with { Tags = state.Tags | Tags.Begin, Positive = $"{positive}" },
+                            state => state with { Tags = state.Tags | Comfy.Tags.Begin, Positive = $"{positive}" },
                             state => state with { Positive = $"{positive} {choice.positive}" },
                             state => state with { Positive = $"{choice.positive} {positive}" },
-                            state => state with { Tags = state.Tags | Tags.End, Positive = $"{choice.positive}" },
+                            state => state with { Tags = state.Tags | Comfy.Tags.End, Positive = $"{choice.positive}" },
                             _ => frame with { Version = version, Positive = $"{choice.positive}" }
                         ));
                         Debug.Log($"MAIN: Begin choice '{choice}' with frame '{_frame}'.");
@@ -390,14 +300,14 @@ Write a short succinct summary description of the next wildly surreal impossible
 Its themes must metaphorically loosely partially vaguely be related to the connotations and poetic imagery of the color '{arrow.Color}'.
 It must follow narratively and constrastively from the previous image description.
 It must include an exotic, bizarre, wonderful and nice visual style.
-Favor abstract concepts and ideas rather than concrete subjects.
+Avoid clichés and favor weird, putrid, uncanny, composite, out-of-this-world and unsettling subjects, environments and themes.
 Your answer must strictly consist of visual styles and an image description of maximum 50 words; nothing else; no salutation, no word count, no acknowledgement, no introduction; just the description.";
-                var description = await Utility.Generate(ollama.client, prompt);
+                var description = await ollama.client.Generate(prompt);
                 while (_end < end) await Task.Delay(100);
 
                 WriteInput(version =>
                 {
-                    var tags = Tags.Icon | arrow.Tags;
+                    var tags = Comfy.Tags.Icon | arrow.Tags;
                     var positive = $"(icon, close up, huge, simple, minimalistic, figurative, {arrow.Color}) {description}";
                     icons.map.TryAdd((version, tags), description);
                     return new()
@@ -410,7 +320,7 @@ Your answer must strictly consist of visual styles and an image description of m
                         Width = 512,
                         Height = 512,
                         Steps = 5,
-                        Guidance = 3f,
+                        Guidance = 6f,
                         Denoise = 0.7f,
                     };
                 });
@@ -452,13 +362,13 @@ Your answer must strictly consist of visual styles and an image description of m
             }
         }
 
-        int WriteInput(Func<int, State> get)
+        int WriteInput(Func<int, Comfy.State> get)
         {
             var version = Interlocked.Increment(ref _version);
             var state = get(_version);
             Debug.Log($"COMFY: Sending input '{state}'.");
-            comfy.StandardInput.WriteLine($"{state}");
-            comfy.StandardInput.Flush();
+            comfy.process.StandardInput.WriteLine($"{state}");
+            comfy.process.StandardInput.Flush();
             return version;
         }
 
@@ -466,27 +376,27 @@ Your answer must strictly consist of visual styles and an image description of m
         {
             var watch = Stopwatch.StartNew();
             var then = (image: watch.Elapsed, batch: watch.Elapsed);
-            while (!comfy.HasExited)
+            while (!comfy.process.HasExited)
             {
-                var line = await comfy.StandardOutput.ReadLineAsync();
+                var line = await comfy.process.StandardOutput.ReadLineAsync();
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 try
                 {
                     var splits = line.Split(",", StringSplitOptions.None);
                     var index = 0;
                     var version = int.Parse(splits[index++]);
-                    var tags = (Tags)int.Parse(splits[index++]);
+                    var tags = (Comfy.Tags)int.Parse(splits[index++]);
                     var width = int.Parse(splits[index++]);
                     var height = int.Parse(splits[index++]);
                     var count = int.Parse(splits[index++]);
                     var offset = int.Parse(splits[index++]);
                     var size = int.Parse(splits[index++]) / count;
                     var generation = int.Parse(splits[index++]);
-                    if (tags.HasFlag(Tags.Begin)) _begin = version;
-                    if (tags.HasFlag(Tags.End)) _end = version;
-                    if (tags.HasFlag(Tags.Frame))
+                    if (tags.HasFlag(Comfy.Tags.Begin)) _begin = version;
+                    if (tags.HasFlag(Comfy.Tags.End)) _end = version;
+                    if (tags.HasFlag(Comfy.Tags.Frame))
                     {
-                        var frame = new Frame
+                        var frame = new Comfy.Frame
                         {
                             Version = version,
                             Generation = generation,
@@ -513,7 +423,7 @@ Your answer must strictly consist of visual styles and an image description of m
                     }
                     if (icons.map.TryRemove((version, tags), out var description))
                     {
-                        var icon = new Icon
+                        var icon = new Comfy.Icon
                         {
                             Version = version,
                             Generation = generation,

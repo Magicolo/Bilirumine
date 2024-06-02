@@ -28,7 +28,7 @@ public sealed class Arrow : MonoBehaviour
 {
     static float Value => Random.value * 1000f;
 
-    public Main.Tags Tags;
+    public Comfy.Tags Tags;
     public Colors Color;
     public string[] Themes = { };
     public Vector2Int Direction;
@@ -39,9 +39,10 @@ public sealed class Arrow : MonoBehaviour
     public Mask Content = default!;
 
     [Header("Debug")]
-    public float Time;
-    public Main.Icon? Icon;
-    public Texture2D? Texture;
+    public float Time { get; set; }
+    public Comfy.Icon? Icon { get; set; }
+    public Texture2D? Texture { get; set; }
+    public AudioClip? Clip { get; set; }
 
     public bool Idle => Time <= 0f;
     public bool Moving => Time > 0f;

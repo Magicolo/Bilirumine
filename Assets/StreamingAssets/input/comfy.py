@@ -1,5 +1,5 @@
-import random, sys, ast, threading, torch, asyncio, os, pickle, mmap
-from queue import SimpleQueue, Empty
+import asyncio, sys, ast, threading, torch, asyncio, mmap, utility
+from queue import SimpleQueue
 
 sys.path.append("/comfy")
 import server, execution
@@ -19,106 +19,9 @@ from nodes import (
 )
 
 
-def seed():
-    return random.randint(1, 2**64)
-
-
-def nudge(value, by):
-    return int(value * (random.random() * by + 1.0))
-
-
-def input():
-    with INPUT_LOCK:
-        return sys.stdin.readline()
-
-
-def output(message):
-    with OUTPUT_LOCK:
-        sys.stdout.write(f"{message}\n")
-        sys.stdout.flush()
-
-
-def error(message):
-    with ERROR_LOCK:
-        sys.stderr.write(f"{message}\n")
-        sys.stderr.flush()
-
-
-def clipped(name, prompt, clip, cache):
-    def encode(prompt, clip):
-        with torch.inference_mode():
-            encoder = CLIPTextEncode()
-            (encoded,) = encoder.encode(text=prompt, clip=clip)
-            return encoded
-
-    name = f"{name}-{hash(prompt)}.clip"
-    if cache:
-        path = os.path.join(cache, name)
-        if os.path.exists(path):
-            with open(path, "rb") as file:
-                return pickle.load(file)
-        encoded = encode(prompt, clip)
-        with open(path, "wb") as file:
-            pickle.dump(encoded, file)
-    else:
-        with CLIP_LOCK:
-            if name in CLIPS:
-                return CLIPS[name]
-        encoded = encode(prompt, clip)
-        with CLIP_LOCK:
-            CLIPS[name] = encoded
-
-    return encoded
-
-
-def work(receive: SimpleQueue, steps):
-    global PAUSE, CANCEL, WAIT
-
-    tasks = SimpleQueue()
-    while True:
-        try:
-            wait = None if tasks.empty() else WAIT
-            (state, *inputs) = receive.get(block=True, timeout=wait)
-            tasks.put((state, inputs, steps(state, *inputs)), block=False)
-        except Empty:
-            pass
-
-        for _ in range(tasks.qsize()):
-            (state, inputs, task) = tasks.get(block=False)
-            while True:
-                if state["version"] in CANCEL:
-                    break
-                elif state["version"] in PAUSE:
-                    tasks.put((state, inputs, task), block=False)
-                    break
-                else:
-                    outputs = next(task)
-                    if outputs is None:
-                        continue
-                    yield state, inputs, outputs
-                    break
-
-
-def reserve(size: int):
-    global NEXT, CAPACITY, GENERATION, MEMORY_LOCK
-
-    with MEMORY_LOCK:
-        if NEXT + size > CAPACITY:
-            offset, NEXT = 0, 0
-            GENERATION += 1
-        else:
-            offset = NEXT
-        NEXT += size
-
-        return offset, GENERATION
-
-
 def load(state: dict, memory: mmap.mmap = None):
-    global GENERATION
-
-    if state["size"] and state["generation"] == GENERATION and memory:
-        memory.seek(state["offset"])
-        data = memory.read(state["size"])
+    if memory and state["size"] and state["generation"]:
+        data = utility.read(memory, state["offset"], state["size"], state["generation"])
         loaded = torch.frombuffer(data, dtype=torch.uint8)
         loaded = loaded.to(dtype=torch.float32)
         loaded = loaded / 255.0
@@ -133,40 +36,28 @@ def load(state: dict, memory: mmap.mmap = None):
 
 
 def read(send):
-    global PAUSE, CANCEL
-
-    with open(MEMORY, "r+b") as file:
-        with mmap.mmap(file.fileno(), CAPACITY, access=mmap.ACCESS_READ) as memory:
-            with torch.inference_mode():
-                (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
-                    "dreamshaperXL_v21TurboDPMSDE.safetensors"
-                )
-                while True:
-                    state = {
-                        **ast.literal_eval(input()),
-                        "model": model,
-                        "clip": clip,
-                        "vae": vae,
-                    }
-                    if state["cancel"]:
-                        CANCEL = CANCEL.union(state["cancel"])
-                    if state["pause"] or state["resume"]:
-                        PAUSE = PAUSE.union(state["pause"]).difference(state["resume"])
-                    loaded = load(state, memory)
-                    if loaded is None:
-                        continue
-                    send.put((state, loaded), block=False)
+    with utility.memory("comfy", mmap.ACCESS_READ) as memory, torch.inference_mode():
+        (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
+            "dreamshaperXL_v21TurboDPMSDE.safetensors"
+        )
+        while True:
+            state = {**utility.input(), "model": model, "clip": clip, "vae": vae}
+            utility.update(state["cancel"], state["pause"], state["resume"])
+            loaded = load(state, memory)
+            if loaded is None:
+                continue
+            send.put((state, loaded), block=False)
 
 
 def extend(receive: SimpleQueue, send: SimpleQueue):
     def steps(state, loaded):
         yield None
         # Apply random variation to outpaint to reduce recurring patterns.
-        left = nudge(state["left"], 0.25)
-        top = nudge(state["top"], 0.25)
-        right = nudge(state["right"], 0.25)
-        bottom = nudge(state["bottom"], 0.25)
-        zoom = nudge(state["zoom"], 0.25)
+        left = utility.nudge(state["left"], 0.25)
+        top = utility.nudge(state["top"], 0.25)
+        right = utility.nudge(state["right"], 0.25)
+        bottom = utility.nudge(state["bottom"], 0.25)
+        zoom = utility.nudge(state["zoom"], 0.25)
         (scaled,) = scaler.upscale(
             loaded, "bicubic", state["width"], state["height"], "disabled"
         )
@@ -202,7 +93,7 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
             )
             yield None
             (sampled,) = sampler.sample(
-                seed=seed(),
+                seed=utility.seed(),
                 steps=5,
                 cfg=1.0,
                 sampler_name="lcm",
@@ -237,7 +128,7 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
         padder = ImagePadForOutpaint()
         scaler = ImageScale()
         sampler = KSampler()
-        for state, _, (scaled, zoomed) in work(receive, steps):
+        for state, _, (scaled, zoomed) in utility.work(receive, steps):
             send.put((state, scaled, zoomed), block=False)
 
 
@@ -254,7 +145,7 @@ def detail(
         (encoded,) = encoder.encode(state["vae"], zoomed)
         yield None
         (sampled,) = sampler.sample(
-            seed=seed(),
+            seed=utility.seed(),
             steps=state["steps"],
             cfg=state["guidance"],
             sampler_name="euler_ancestral",
@@ -274,7 +165,7 @@ def detail(
         encoder = VAEEncode()
         decoder = VAEDecode()
         sampler = KSampler()
-        for state, (scaled, _), (decoded,) in work(receive, steps):
+        for state, (scaled, _), (decoded,) in utility.work(receive, steps):
             if state["full"]:
                 send.put((state, scaled, decoded), block=False)
             else:
@@ -296,7 +187,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
         (interpolated,) = interpolator.vfi(
             ckpt_name="rife49.pth",
             frames=batched,
-            clear_cache_after_n_frames=100,
+            clear_cache_after_n_frames=1000,
             multiplier=6,
             fast_mode=True,
             ensemble=True,
@@ -306,7 +197,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
         (images,) = interpolator.vfi(
             ckpt_name="rife49.pth",
             frames=interpolated,
-            clear_cache_after_n_frames=100,
+            clear_cache_after_n_frames=1000,
             multiplier=18,
             fast_mode=True,
             ensemble=True,
@@ -317,12 +208,11 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
     with torch.inference_mode():
         batcher = ImageBatch()
         interpolator = NODE_CLASS_MAPPINGS["RIFE VFI"]()
-        for state, _, (images,) in work(receive, steps):
+        for state, _, (images,) in utility.work(receive, steps):
             send.put((state, images[1:]), block=False)
 
 
 def write(receive: SimpleQueue):
-
     def steps(state, images):
         yield None
         [count, height, width, _] = images.shape
@@ -336,39 +226,18 @@ def write(receive: SimpleQueue):
         yield None
         data = images.tobytes()
         yield None
-        size = len(data)
-        offset, generation = reserve(size)
-        yield None
-        memory.seek(offset)
-        memory.write(data)
-        yield None
-        output(
-            f'{state["version"]},{state["tags"]},{width},{height},{count},{offset},{size},{generation}'
-        )
+        offset, size, generation = utility.write(memory, offset, data)
         yield None
         torch.cuda.empty_cache()
-        yield (True,)
+        yield (width, height, count, offset, size, generation)
 
-    with open(MEMORY, "r+b") as file:
-        with mmap.mmap(file.fileno(), CAPACITY, access=mmap.ACCESS_WRITE) as memory:
-            with torch.inference_mode():
-                for _, _, _ in work(receive, steps):
-                    pass
+    with utility.memory("comfy", mmap.ACCESS_WRITE) as memory, torch.inference_mode():
+        for state, _, outputs in utility.work(receive, steps):
+            (width, height, count, offset, size, generation) = outputs
+            utility.output(
+                f'{state["version"]},{state["tags"]},{width},{height},{count},{offset},{size},{generation}'
+            )
 
-
-WAIT = 0.1
-PAUSE = set()
-CANCEL = set()
-CLIPS = {}
-GENERATION = 1
-CAPACITY = 2**31 - 1
-NEXT = 0
-MEMORY = "/dev/shm/bilirumine"
-MEMORY_LOCK = threading.Lock()
-CLIP_LOCK = threading.Lock()
-INPUT_LOCK = threading.Lock()
-OUTPUT_LOCK = threading.Lock()
-ERROR_LOCK = threading.Lock()
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
