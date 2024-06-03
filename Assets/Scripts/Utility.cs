@@ -12,6 +12,8 @@ using Debug = UnityEngine.Debug;
 
 public static class Utility
 {
+    public static string? Escape(string? value) => value?.Replace(@"""", @"\""");
+
     public static MemoryMappedFile Memory(string name)
     {
         var file = $"bilirumine_{name}";

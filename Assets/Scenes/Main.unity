@@ -537,7 +537,7 @@ MonoBehaviour:
   Down: {fileID: 1612028219}
   Flash: {fileID: 475307205}
   Output: {fileID: 1691789343}
-  Audio: {fileID: 0}
+  Source: {fileID: 2092945304}
   Statistics: {fileID: 1306941141}
 --- !u!114 &1133319708 stripped
 MonoBehaviour:
@@ -1330,7 +1330,7 @@ AudioSource:
   OutputAudioMixerGroup: {fileID: 0}
   m_audioClip: {fileID: 0}
   m_Resource: {fileID: 0}
-  m_PlayOnAwake: 1
+  m_PlayOnAwake: 0
   m_Volume: 1
   m_Pitch: 1
   Loop: 0

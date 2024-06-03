@@ -1,14 +1,11 @@
 #nullable enable
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 using Debug = UnityEngine.Debug;
@@ -34,8 +31,6 @@ public static class Comfy
         }
         public static State? Sequence(params State[] states) => Sequence(states.AsEnumerable());
         public static State Sequence(State state, params Func<State, State>[] maps) => Sequence(maps.Select(map => map(state)))!;
-
-        static string? Escape(string? value) => value?.Replace(@"""", @"\""");
 
         public int Version;
         public bool Loop;
@@ -66,7 +61,34 @@ public static class Comfy
 
         public State Map(Func<State, State> map) => map(Next is { } next ? this with { Next = next.Map(map) } : this);
 
-        public override string ToString() => $@"{{""version"":{Version},""loop"":{(Loop ? "True" : "False")},""tags"":{(int)Tags},""width"":{Width},""height"":{Height},""offset"":{Offset},""size"":{Size},""generation"":{Generation},""shape"":({Shape.height}, {Shape.width}),""left"":{Left},""right"":{Right},""bottom"":{Bottom},""top"":{Top},""zoom"":{Zoom},""steps"":{Steps},""guidance"":{Guidance},""denoise"":{Denoise},""full"":{(Full ? "True" : "False")},""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],""empty"":{(Empty ? "True" : "False")},""positive"":""{Escape(Positive)}"",""negative"":""{Escape(Negative)}"",""load"":""{Load}"",""next"":{Next?.ToString() ?? "None"}}}";
+        public override string ToString() => $@"{{
+""version"":{Version},
+""loop"":{(Loop ? "True" : "False")},
+""tags"":{(int)Tags},
+""width"":{Width},
+""height"":{Height},
+""offset"":{Offset},
+""size"":{Size},
+""generation"":{Generation},
+""shape"":({Shape.height}, {Shape.width}),
+""left"":{Left},
+""right"":{Right},
+""bottom"":{Bottom},
+""top"":{Top},
+""zoom"":{Zoom},
+""steps"":{Steps},
+""guidance"":{Guidance},
+""denoise"":{Denoise},
+""full"":{(Full ? "True" : "False")},
+""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],
+""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],
+""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],
+""empty"":{(Empty ? "True" : "False")},
+""positive"":""{Utility.Escape(Positive)}"",
+""negative"":""{Utility.Escape(Negative)}"",
+""load"":""{Load}"",
+""next"":{Next?.ToString() ?? "None"}
+}}".Replace("\n", "").Replace("\r", "");
     }
 
     public record Frame
@@ -94,19 +116,6 @@ public static class Comfy
         public string Description = "";
     }
 
-    [Flags]
-    public enum Tags
-    {
-        Frame = 1 << 0,
-        Icon = 1 << 1,
-        Left = 1 << 2,
-        Right = 1 << 3,
-        Up = 1 << 4,
-        Down = 1 << 5,
-        Begin = 1 << 6,
-        End = 1 << 7,
-        Move = 1 << 8
-    }
     public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("comfy"), Utility.Memory("image"));
 
     public static bool Load(this MemoryMappedFile memory, int width, int height, int offset, int size, ref Texture2D? texture)

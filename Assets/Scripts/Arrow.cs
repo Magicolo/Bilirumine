@@ -24,11 +24,26 @@ public enum Colors
     Yellow
 }
 
+[Flags]
+public enum Tags
+{
+    Frame = 1 << 0,
+    Icon = 1 << 1,
+    Clip = 1 << 2,
+    Left = 1 << 3,
+    Right = 1 << 4,
+    Up = 1 << 5,
+    Down = 1 << 6,
+    Begin = 1 << 7,
+    End = 1 << 8,
+    Move = 1 << 9
+}
+
 public sealed class Arrow : MonoBehaviour
 {
     static float Value => Random.value * 1000f;
 
-    public Comfy.Tags Tags;
+    public Tags Tags;
     public Colors Color;
     public string[] Themes = { };
     public Vector2Int Direction;
@@ -37,12 +52,14 @@ public sealed class Arrow : MonoBehaviour
     public Socket Socket = default!;
     public Image Image = default!;
     public Mask Content = default!;
+    public AudioSource Source = default!;
+    public AudioLowPassFilter Filter = default!;
 
-    [Header("Debug")]
     public float Time { get; set; }
     public Comfy.Icon? Icon { get; set; }
+    public Audiocraft.Clip? Clip { get; set; }
     public Texture2D? Texture { get; set; }
-    public AudioClip? Clip { get; set; }
+    public AudioClip? Audio { get; set; }
 
     public bool Idle => Time <= 0f;
     public bool Moving => Time > 0f;

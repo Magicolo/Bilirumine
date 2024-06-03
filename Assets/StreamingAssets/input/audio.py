@@ -21,8 +21,6 @@ def read(send: SimpleQueue):
             state = utility.input()
             utility.update(state["cancel"], state["pause"], state["resume"])
             loaded = load(state, memory)
-            if loaded is None:
-                continue
             send.put((state, loaded), block=False)
 
 
@@ -56,7 +54,7 @@ def write(receive: SimpleQueue):
     def steps(_, clips):
         yield None
         [count, channels, samples] = clips.shape
-        data = clips.numpy().tobytes()
+        data = clips.cpu().numpy().tobytes()
         yield None
         offset, size, generation = utility.write(memory, data)
         yield None
@@ -67,7 +65,7 @@ def write(receive: SimpleQueue):
         for state, _, outputs in utility.work(receive, steps):
             (samples, channels, count, offset, size, generation) = outputs
             utility.output(
-                f'{state["version"]},{state["rate"]},{samples},{channels},{count},{offset},{size},{generation}'
+                f'{state["version"]},{state["tags"]},{state["rate"]},{samples},{channels},{count},{offset},{size},{generation}'
             )
 
 

@@ -10,7 +10,6 @@ using TMPro;
 using System.Linq;
 using UnityEngine.UI;
 using Debug = UnityEngine.Debug;
-using System.Threading;
 using Random = UnityEngine.Random;
 using System.Collections.Generic;
 
@@ -63,7 +62,7 @@ public sealed class Main : MonoBehaviour
     public Arrow Down = default!;
     public Image Flash = default!;
     public Image Output = default!;
-    public AudioSource Audio = default!;
+    public AudioSource Source = default!;
     public TMP_Text Statistics = default!;
 
     Inputs _inputs = default;
@@ -86,19 +85,19 @@ public sealed class Main : MonoBehaviour
             images: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta.image))),
             batches: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 5).Select(_ => TimeSpan.FromSeconds(delta.batch))));
         var frames = new ConcurrentQueue<Comfy.Frame>();
-        var icons = (
-            arrows: new[] { Left, Right, Up, Down },
-            queue: new ConcurrentQueue<Comfy.Icon>(),
-            map: new ConcurrentDictionary<(int version, Comfy.Tags tags), string>());
         var clips = new ConcurrentQueue<Audiocraft.Clip>();
+        var arrows = (
+            components: new[] { Left, Right, Up, Down },
+            icons: (queue: new ConcurrentQueue<Comfy.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()),
+            clips: new ConcurrentQueue<Audiocraft.Clip>());
         StartCoroutine(UpdateFrames());
-        StartCoroutine(UpdateIcons());
         StartCoroutine(UpdateClips());
+        StartCoroutine(UpdateArrows());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateDebug());
 
-        foreach (var item in Utility.Wait(ReadOutput(), Audiocraft.Read(audiocraft.process, clips)))
+        foreach (var item in Utility.Wait(ComfyOutput(), AudiocraftOutput()))
         {
             Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
             Cursor.visible = Application.isEditor;
@@ -130,12 +129,12 @@ public sealed class Main : MonoBehaviour
             }
         }
 
-        IEnumerator UpdateIcons()
+        IEnumerator UpdateArrows()
         {
             while (true)
             {
-                if (icons.queue.TryDequeue(out var icon))
-                    foreach (var arrow in icons.arrows)
+                if (arrows.icons.queue.TryDequeue(out var icon))
+                    foreach (var arrow in arrows.components)
                         comfy.memory.Load(arrow, icon);
                 yield return null;
             }
@@ -153,8 +152,8 @@ public sealed class Main : MonoBehaviour
                 });
                 if (clips.TryDequeue(out var clip) && audiocraft.memory.Load(clip, ref audio))
                 {
-                    Audio.clip = audio;
-                    Audio.Play();
+                    Source.clip = audio;
+                    Source.Play();
                     // if (clips.Count > 10)
                     // {
                     //     // TODO: Pause generation.
@@ -210,7 +209,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
             var negative = Comfy.Styles("nude", "naked", "nudity", "youth", "child", "children", "blurry", "worst quality", "low detail");
             var frame = new Comfy.State()
             {
-                Tags = Comfy.Tags.Frame,
+                Tags = Tags.Frame,
                 Width = _resolutions.high.width,
                 Height = _resolutions.high.height,
                 Loop = true,
@@ -234,7 +233,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
                 UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
-                switch ((choice.chosen, icons.arrows.FirstOrDefault(arrow => arrow.Moving)))
+                switch ((choice.chosen, arrows.components.FirstOrDefault(arrow => arrow.Moving)))
                 {
                     // Begin choice.
                     case (null, { Icon: { } icon } moving):
@@ -245,7 +244,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             frame with
                             {
                                 Version = version,
-                                Tags = frame.Tags | Comfy.Tags.Move,
+                                Tags = frame.Tags | Tags.Move,
                                 Loop = false,
                                 Offset = _frame.Offset,
                                 Size = _frame.Size,
@@ -262,10 +261,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
                                 Top = Math.Max(moving.Direction.y, 0),
                                 Bottom = Math.Max(-moving.Direction.y, 0),
                             },
-                            state => state with { Tags = state.Tags | Comfy.Tags.Begin, Positive = $"{positive}" },
+                            state => state with { Tags = state.Tags | Tags.Begin, Positive = $"{positive}" },
                             state => state with { Positive = $"{positive} {choice.positive}" },
                             state => state with { Positive = $"{choice.positive} {positive}" },
-                            state => state with { Tags = state.Tags | Comfy.Tags.End, Positive = $"{choice.positive}" },
+                            state => state with { Tags = state.Tags | Tags.End, Positive = $"{choice.positive}" },
                             _ => frame with { Version = version, Positive = $"{choice.positive}" }
                         ));
                         Debug.Log($"MAIN: Begin choice '{choice}' with frame '{_frame}'.");
@@ -288,7 +287,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             positive = choice.positive;
                             choice = (0, positive, null);
                             GenerateIcons(loop, positive, negative);
-                            foreach (var arrow in icons.arrows) arrow.Hide();
+                            foreach (var arrow in arrows.components) arrow.Hide();
                         }
                         break;
                     // Cancel choice.
@@ -307,7 +306,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 yield return null;
             }
 
-            Task GenerateIcons(int end, string positive, string negative) => Task.WhenAll(icons.arrows.Select(async arrow =>
+            Task GenerateIcons(int end, string positive, string negative) => Task.WhenAll(arrows.components.Select(async arrow =>
             {
                 var random = new System.Random();
                 var prompt = $@"
@@ -325,9 +324,9 @@ Your answer must strictly consist of visual styles and an image description of m
 
                 Comfy.Write(comfy.process, version =>
                 {
-                    var tags = Comfy.Tags.Icon | arrow.Tags;
+                    var tags = Tags.Icon | arrow.Tags;
                     var positive = $"(icon, close up, huge, simple, minimalistic, figurative, {arrow.Color}) {description}";
-                    icons.map.TryAdd((version, tags), description);
+                    arrows.icons.map.TryAdd((version, tags), description);
                     return new()
                     {
                         Version = version,
@@ -346,11 +345,11 @@ Your answer must strictly consist of visual styles and an image description of m
 
             void UpdateIcon(Arrow arrow, float speed, int index, bool[] inputs, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
             {
-                var hidden = icons.arrows.Any(arrow => arrow.Hidden);
+                var hidden = arrows.components.Any(arrow => arrow.Hidden);
                 var move =
                     inputs[index] &&
                     inputs.Enumerate().All(pair => pair.index == index || !pair.item) &&
-                    icons.arrows.All(other => arrow == other || other.Idle);
+                    arrows.components.All(other => arrow == other || other.Idle);
                 {
                     var source = arrow.Rectangle.anchoredPosition;
                     var target = hidden ? hide(source) : move ? choose(source) : peek(source);
@@ -379,7 +378,7 @@ Your answer must strictly consist of visual styles and an image description of m
             }
         }
 
-        async Task ReadOutput()
+        async Task ComfyOutput()
         {
             var watch = Stopwatch.StartNew();
             var then = (image: watch.Elapsed, batch: watch.Elapsed);
@@ -392,16 +391,16 @@ Your answer must strictly consist of visual styles and an image description of m
                     var index = 0;
                     var splits = line.Split(",", StringSplitOptions.None);
                     var version = int.Parse(splits[index++]);
-                    var tags = (Comfy.Tags)int.Parse(splits[index++]);
+                    var tags = (Tags)int.Parse(splits[index++]);
                     var width = int.Parse(splits[index++]);
                     var height = int.Parse(splits[index++]);
                     var count = int.Parse(splits[index++]);
                     var offset = int.Parse(splits[index++]);
                     var size = int.Parse(splits[index++]) / count;
                     var generation = int.Parse(splits[index++]);
-                    if (tags.HasFlag(Comfy.Tags.Begin)) _begin = version;
-                    if (tags.HasFlag(Comfy.Tags.End)) _end = version;
-                    if (tags.HasFlag(Comfy.Tags.Frame))
+                    if (tags.HasFlag(Tags.Begin)) _begin = version;
+                    if (tags.HasFlag(Tags.End)) _end = version;
+                    if (tags.HasFlag(Tags.Frame))
                     {
                         var frame = new Comfy.Frame
                         {
@@ -428,7 +427,7 @@ Your answer must strictly consist of visual styles and an image description of m
                             then.batch = now;
                         }
                     }
-                    if (icons.map.TryRemove((version, tags), out var description))
+                    if (arrows.icons.map.TryRemove((version, tags), out var description))
                     {
                         var icon = new Comfy.Icon
                         {
@@ -442,11 +441,52 @@ Your answer must strictly consist of visual styles and an image description of m
                             Description = description,
                         };
                         Comfy.Log($"Received icon: {icon}");
-                        icons.queue.Enqueue(icon);
+                        arrows.icons.queue.Enqueue(icon);
                     }
                 }
                 catch (FormatException) { Comfy.Warn(line); }
                 catch (IndexOutOfRangeException) { Comfy.Warn(line); }
+                catch (Exception exception) { Debug.LogException(exception); }
+            }
+        }
+
+        async Task AudiocraftOutput()
+        {
+            while (!audiocraft.process.HasExited)
+            {
+                var line = await audiocraft.process.StandardOutput.ReadLineAsync();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    var index = 0;
+                    var splits = line.Split(",", StringSplitOptions.None);
+                    var version = int.Parse(splits[index++]);
+                    var tags = (Tags)int.Parse(splits[index++]);
+                    var rate = int.Parse(splits[index++]);
+                    var samples = int.Parse(splits[index++]);
+                    var channels = int.Parse(splits[index++]);
+                    var count = int.Parse(splits[index++]);
+                    var offset = int.Parse(splits[index++]);
+                    var size = int.Parse(splits[index++]) / count;
+                    var generation = int.Parse(splits[index++]);
+                    var clip = new Audiocraft.Clip
+                    {
+                        Version = version,
+                        Tags = tags,
+                        Rate = rate,
+                        Samples = samples,
+                        Channels = channels,
+                        Count = count,
+                        Offset = offset,
+                        Size = size,
+                        Generation = generation,
+                    };
+                    Audiocraft.Log($"Received clip: {clip}");
+                    for (int i = 0; i < count; i++, offset += size)
+                        clips.Enqueue(clip with { Index = i, Offset = offset });
+                }
+                catch (FormatException) { Audiocraft.Warn(line); }
+                catch (IndexOutOfRangeException) { Audiocraft.Warn(line); }
                 catch (Exception exception) { Debug.LogException(exception); }
             }
         }

@@ -1,11 +1,10 @@
 #nullable enable
 
 using System;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
+using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
@@ -18,6 +17,7 @@ public static class Audiocraft
         public static int Reserve() => Interlocked.Increment(ref _version);
 
         public int Version;
+        public Tags Tags;
         public bool Loop;
         public int Offset;
         public int Size;
@@ -27,12 +27,24 @@ public static class Audiocraft
         public int[]? Pause;
         public int[]? Resume;
 
-        public override string ToString() => $@"{{""version"":{Version},""loop"":{(Loop ? "True" : "False")},""offset"":{Offset},""size"":{Size},""generation"":{Generation},""prompts"":[{string.Join(",", Prompts ?? Array.Empty<string>())}],""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}]}}";
+        public override string ToString() => $@"{{
+""version"":{Version},
+""tags"":{(int)Tags},
+""loop"":{(Loop ? "True" : "False")},
+""offset"":{Offset},
+""size"":{Size},
+""generation"":{Generation},
+""prompts"":[{string.Join(",", Prompts.Select(prompt => $@"""{Utility.Escape(prompt)}""") ?? Array.Empty<string>())}],
+""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],
+""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],
+""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}]
+}}".Replace("\n", "").Replace("\r", "");
     }
 
     public sealed record Clip
     {
         public int Version;
+        public Tags Tags;
         public int Rate;
         public int Samples;
         public int Channels;
@@ -82,45 +94,6 @@ public static class Audiocraft
         process.StandardInput.WriteLine($"{state}");
         process.StandardInput.Flush();
         return version;
-    }
-
-    public static async Task Read(Process process, ConcurrentQueue<Clip> clips)
-    {
-        while (!process.HasExited)
-        {
-            var line = await process.StandardOutput.ReadLineAsync();
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            try
-            {
-                var index = 0;
-                var splits = line.Split(",", StringSplitOptions.None);
-                var version = int.Parse(splits[index++]);
-                var rate = int.Parse(splits[index++]);
-                var samples = int.Parse(splits[index++]);
-                var channels = int.Parse(splits[index++]);
-                var count = int.Parse(splits[index++]);
-                var offset = int.Parse(splits[index++]);
-                var size = int.Parse(splits[index++]) / count;
-                var generation = int.Parse(splits[index++]);
-                var clip = new Clip
-                {
-                    Version = version,
-                    Rate = rate,
-                    Samples = samples,
-                    Channels = channels,
-                    Count = count,
-                    Offset = offset,
-                    Size = size,
-                    Generation = generation,
-                };
-                Log($"Received clip: {clip}");
-                for (int i = 0; i < count; i++, offset += size)
-                    clips.Enqueue(clip with { Index = i, Offset = offset });
-            }
-            catch (FormatException) { Warn(line); }
-            catch (IndexOutOfRangeException) { Warn(line); }
-            catch (Exception exception) { Debug.LogException(exception); }
-        }
     }
 
     public static void Log(string message) => Debug.Log($"AUDIOCRAFT: {message}");
