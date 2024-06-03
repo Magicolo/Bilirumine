@@ -28,8 +28,8 @@ public enum Colors
 public enum Tags
 {
     Frame = 1 << 0,
-    Icon = 1 << 1,
-    Clip = 1 << 2,
+    Clip = 1 << 1,
+    Icon = 1 << 2,
     Left = 1 << 3,
     Right = 1 << 4,
     Up = 1 << 5,
@@ -55,16 +55,15 @@ public sealed class Arrow : MonoBehaviour
     public AudioSource Source = default!;
     public AudioLowPassFilter Filter = default!;
 
+    public (Comfy.Icon? image, Audiocraft.Icon? sound) Icons;
     public float Time { get; set; }
-    public Comfy.Icon? Icon { get; set; }
-    public Audiocraft.Clip? Clip { get; set; }
     public Texture2D? Texture { get; set; }
     public AudioClip? Audio { get; set; }
 
     public bool Idle => Time <= 0f;
     public bool Moving => Time > 0f;
     public bool Chosen => Time >= 5f;
-    public bool Hidden => Icon is null;
+    public bool Hidden => Icons is (null, _) or (_, null);
 
     (float root, float socket) _offsets;
 
@@ -76,7 +75,7 @@ public sealed class Arrow : MonoBehaviour
         Content.transform.localScale = Content.transform.localScale.With(Sine2(1.5f, 0.06f, 0.8f, _offsets.socket));
     }
 
-    public void Hide() { Icon = null; Time = 0f; }
+    public void Hide() { Icons = default; Time = 0f; }
 
     float Sine(float frequency, float amplitude, float center, float offset) =>
         Mathf.Sin(UnityEngine.Time.time * frequency + offset) * amplitude + center;

@@ -94,6 +94,7 @@ public static class Comfy
     public record Frame
     {
         public int Version;
+        public Tags Tags;
         public int Generation;
         public int Index;
         public int Count;
@@ -101,18 +102,17 @@ public static class Comfy
         public int Height;
         public int Offset;
         public int Size;
-        public Tags Tags;
     }
 
     public record Icon
     {
         public int Version;
+        public Tags Tags;
         public int Generation;
         public int Width;
         public int Height;
         public int Offset;
         public int Size;
-        public Tags Tags;
         public string Description = "";
     }
 
@@ -166,7 +166,7 @@ public static class Comfy
             var area = new Rect(0f, 0f, icon.Width, icon.Height);
             arrow.Texture = texture;
             arrow.Image.sprite = Sprite.Create(arrow.Texture, area, area.center);
-            arrow.Icon = icon;
+            arrow.Icons.image = icon;
             return true;
         }
         else

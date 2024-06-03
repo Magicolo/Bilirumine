@@ -15,6 +15,8 @@ using System.Collections.Generic;
 
 /*
     TODO
+    - Generate an ambiance with 'MagNet'.
+    - Generate music in smaller chunks to favor diversity and dynamism.
     - Make the prompt LLM generate more diverse visual styles and subjects.
         - List hundreds of color-inspired subjects/environments/themes/styles with GPT4 and choose 3 randomly to direct the prompt.
     - Add a visual indication that motion is happening.
@@ -88,8 +90,8 @@ public sealed class Main : MonoBehaviour
         var clips = new ConcurrentQueue<Audiocraft.Clip>();
         var arrows = (
             components: new[] { Left, Right, Up, Down },
-            icons: (queue: new ConcurrentQueue<Comfy.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()),
-            clips: new ConcurrentQueue<Audiocraft.Clip>());
+            images: (queue: new ConcurrentQueue<Comfy.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()),
+            sounds: (queue: new ConcurrentQueue<Audiocraft.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()));
         StartCoroutine(UpdateFrames());
         StartCoroutine(UpdateClips());
         StartCoroutine(UpdateArrows());
@@ -129,36 +131,36 @@ public sealed class Main : MonoBehaviour
             }
         }
 
-        IEnumerator UpdateArrows()
-        {
-            while (true)
-            {
-                if (arrows.icons.queue.TryDequeue(out var icon))
-                    foreach (var arrow in arrows.components)
-                        comfy.memory.Load(arrow, icon);
-                yield return null;
-            }
-        }
-
         IEnumerator UpdateClips()
         {
-            var audio = default(AudioClip);
+            var main = default(AudioClip);
+            var load = default(AudioClip);
             while (true)
             {
-                if (_inputs.Space.Take()) Audiocraft.Write(audiocraft.process, version => new()
+                if (clips.TryDequeue(out var clip) && audiocraft.memory.Load(clip, ref load))
                 {
-                    Version = version,
-                    Prompts = new[] { "tubular bells" },
-                });
-                if (clips.TryDequeue(out var clip) && audiocraft.memory.Load(clip, ref audio))
-                {
-                    Source.clip = audio;
+                    Source.clip = load;
                     Source.Play();
+                    (main, load) = (load, main);
                     // if (clips.Count > 10)
                     // {
                     //     // TODO: Pause generation.
                     // }
                 }
+                yield return null;
+            }
+        }
+
+        IEnumerator UpdateArrows()
+        {
+            while (true)
+            {
+                if (arrows.images.queue.TryDequeue(out var icon))
+                    foreach (var arrow in arrows.components)
+                        comfy.memory.Load(arrow, icon);
+                if (arrows.sounds.queue.TryDequeue(out var sound))
+                    foreach (var arrow in arrows.components)
+                        audiocraft.memory.Load(arrow, sound);
                 yield return null;
             }
         }
@@ -206,6 +208,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
             var speed = 3.75f;
             var styles = Comfy.Styles("ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant");
             var positive = $"void";
+            var prompt = "void";
             var negative = Comfy.Styles("nude", "naked", "nudity", "youth", "child", "children", "blurry", "worst quality", "low detail");
             var frame = new Comfy.State()
             {
@@ -220,11 +223,13 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Negative = negative,
                 Full = true,
             };
+            var clip = new Audiocraft.State() { Tags = Tags.Clip };
             var loop = Comfy.Write(comfy.process, version => frame with { Version = version, Empty = true, Positive = positive });
+            Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
             GenerateIcons(0, positive, negative);
 
             var view = Canvas.LocalRectangle();
-            var choice = (version: 0, positive, chosen: default(Arrow));
+            var choice = (version: 0, positive, prompt, chosen: default(Arrow));
             while (true)
             {
                 var inputs = new[] { _inputs.Left.Take(), _inputs.Right.Take(), _inputs.Up.Take(), _inputs.Down.Take() };
@@ -233,13 +238,19 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
                 UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
+                // TODO: Remove this.
+                if (_inputs.Space.Take())
+                    Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
+
                 switch ((choice.chosen, arrows.components.FirstOrDefault(arrow => arrow.Moving)))
                 {
                     // Begin choice.
-                    case (null, { Icon: { } icon } moving):
+                    case (null, { Icons: ({ } image, { } sound) } moving):
                         _play = false;
+                        moving.Source.Play();
                         choice.chosen = moving;
-                        choice.positive = $"{styles} ({moving.Color}) {icon.Description}";
+                        choice.positive = $"{styles} ({moving.Color}) {image.Description}";
+                        choice.prompt = $"({moving.Color}) {sound.Description}";
                         choice.version = Comfy.Write(comfy.process, version => Comfy.State.Sequence(
                             frame with
                             {
@@ -273,6 +284,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     case ({ Chosen: false } chosen, var moving) when chosen == moving:
                         _play = false;
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
+                        Source.volume = Mathf.Lerp(Source.volume, 0f, Time.deltaTime * speed);
                         break;
                     // End choice.
                     case ({ Chosen: true } chosen, var moving) when chosen == moving:
@@ -283,9 +295,11 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             _play = true;
                             _cancel.Add(loop);
                             Comfy.Write(comfy.process, version => new() { Version = version, Cancel = new[] { loop } });
+                            // Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { choice.prompt } });
                             loop = choice.version;
                             positive = choice.positive;
-                            choice = (0, positive, null);
+                            prompt = choice.prompt;
+                            choice = (0, positive, prompt, null);
                             GenerateIcons(loop, positive, negative);
                             foreach (var arrow in arrows.components) arrow.Hide();
                         }
@@ -296,11 +310,12 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         _play = true;
                         _cancel.Add(choice.version);
                         Comfy.Write(comfy.process, version => new() { Version = version, Resume = new[] { loop }, Cancel = new[] { choice.version } });
-                        choice = (0, positive, null);
+                        choice = (0, positive, prompt, null);
                         break;
                     case (null, null):
                         _play = true;
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
+                        Source.volume = Mathf.Lerp(Source.volume, 1f, Time.deltaTime * speed);
                         break;
                 }
                 yield return null;
@@ -310,7 +325,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
             {
                 var random = new System.Random();
                 var prompt = $@"
-Previous image description: '{arrow.Icon?.Description}'
+Previous image description: '{arrow.Icons.image?.Description}'
 
 You are a divergent, creative and eccentric artist that excels in telling masterful and powerful impromptu stories through image descriptions.
 Write a short succinct summary description of the next wildly surreal impossible creative image.
@@ -319,14 +334,15 @@ It must follow narratively and constrastively from the previous image descriptio
 It must include an exotic, bizarre, wonderful and nice visual style.
 Avoid clichés and favor weird, putrid, uncanny, composite, out-of-this-world and unsettling subjects, environments and themes.
 Your answer must strictly consist of visual styles and an image description of maximum 50 words; nothing else; no salutation, no word count, no acknowledgement, no introduction; just the description.";
+                // TODO: Prompt for an image description, a music description, and an ambiance description as a json object.
                 var description = await ollama.client.Generate(prompt);
                 while (_end < end) await Task.Delay(100);
 
                 Comfy.Write(comfy.process, version =>
                 {
                     var tags = Tags.Icon | arrow.Tags;
-                    var positive = $"(icon, close up, huge, simple, minimalistic, figurative, {arrow.Color}) {description}";
-                    arrows.icons.map.TryAdd((version, tags), description);
+                    var positive = $"{Comfy.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {description}";
+                    arrows.images.map.TryAdd((version, tags), description);
                     return new()
                     {
                         Version = version,
@@ -340,6 +356,13 @@ Your answer must strictly consist of visual styles and an image description of m
                         Guidance = 6f,
                         Denoise = 0.7f,
                     };
+                });
+                Audiocraft.Write(audiocraft.process, version =>
+                {
+                    var tags = Tags.Icon | arrow.Tags;
+                    var prompt = $"Punchy, jingle, stinger, notification. ({arrow.Color}) {description}";
+                    arrows.sounds.map.TryAdd((version, tags), description);
+                    return new() { Version = version, Tags = tags, Prompts = new[] { prompt }, };
                 });
             }));
 
@@ -373,6 +396,10 @@ Your answer must strictly consist of visual styles and an image description of m
                     var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time / 3.75f, 2f), 1f) : Vector3.one;
                     var scale = Vector3.Lerp(source, target, Time.deltaTime * speed);
                     arrow.Shake.localScale = scale;
+                }
+                {
+                    arrow.Source.volume = Mathf.Lerp(arrow.Source.volume, move ? 1f : 0f, Time.deltaTime * speed);
+                    arrow.Filter.cutoffFrequency = Mathf.Lerp(arrow.Filter.cutoffFrequency, move ? 5000f : 0f, Time.deltaTime);
                 }
                 arrow.Time = hidden ? 0f : move ? arrow.Time + Time.deltaTime : 0f;
             }
@@ -427,7 +454,7 @@ Your answer must strictly consist of visual styles and an image description of m
                             then.batch = now;
                         }
                     }
-                    if (arrows.icons.map.TryRemove((version, tags), out var description))
+                    if (arrows.images.map.TryRemove((version, tags), out var description))
                     {
                         var icon = new Comfy.Icon
                         {
@@ -441,7 +468,7 @@ Your answer must strictly consist of visual styles and an image description of m
                             Description = description,
                         };
                         Comfy.Log($"Received icon: {icon}");
-                        arrows.icons.queue.Enqueue(icon);
+                        arrows.images.queue.Enqueue(icon);
                     }
                 }
                 catch (FormatException) { Comfy.Warn(line); }
@@ -469,21 +496,41 @@ Your answer must strictly consist of visual styles and an image description of m
                     var offset = int.Parse(splits[index++]);
                     var size = int.Parse(splits[index++]) / count;
                     var generation = int.Parse(splits[index++]);
-                    var clip = new Audiocraft.Clip
+                    if (tags.HasFlag(Tags.Clip))
                     {
-                        Version = version,
-                        Tags = tags,
-                        Rate = rate,
-                        Samples = samples,
-                        Channels = channels,
-                        Count = count,
-                        Offset = offset,
-                        Size = size,
-                        Generation = generation,
-                    };
-                    Audiocraft.Log($"Received clip: {clip}");
-                    for (int i = 0; i < count; i++, offset += size)
-                        clips.Enqueue(clip with { Index = i, Offset = offset });
+                        var clip = new Audiocraft.Clip
+                        {
+                            Version = version,
+                            Tags = tags,
+                            Rate = rate,
+                            Samples = samples,
+                            Channels = channels,
+                            Count = count,
+                            Offset = offset,
+                            Size = size,
+                            Generation = generation,
+                        };
+                        Audiocraft.Log($"Received clip: {clip}");
+                        for (int i = 0; i < count; i++, offset += size)
+                            clips.Enqueue(clip with { Index = i, Offset = offset });
+                    }
+                    if (arrows.sounds.map.TryRemove((version, tags), out var description))
+                    {
+                        var icon = new Audiocraft.Icon
+                        {
+                            Version = version,
+                            Tags = tags,
+                            Rate = rate,
+                            Samples = samples,
+                            Channels = channels,
+                            Offset = offset,
+                            Size = size,
+                            Generation = generation,
+                            Description = description,
+                        };
+                        Audiocraft.Log($"Received icon: {icon}");
+                        arrows.sounds.queue.Enqueue(icon);
+                    }
                 }
                 catch (FormatException) { Audiocraft.Warn(line); }
                 catch (IndexOutOfRangeException) { Audiocraft.Warn(line); }

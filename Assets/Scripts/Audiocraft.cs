@@ -55,6 +55,19 @@ public static class Audiocraft
         public int Generation;
     }
 
+    public sealed record Icon
+    {
+        public int Version;
+        public Tags Tags;
+        public int Rate;
+        public int Samples;
+        public int Channels;
+        public int Offset;
+        public int Size;
+        public int Generation;
+        public string Description = "";
+    }
+
     public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("audiocraft"), Utility.Memory("audio"));
 
     public static bool Load(this MemoryMappedFile memory, int rate, int samples, int channels, int offset, ref AudioClip? audio)
@@ -84,7 +97,21 @@ public static class Audiocraft
     }
 
     public static bool Load(this MemoryMappedFile memory, Clip clip, ref AudioClip? audio) =>
-        memory.Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, ref audio);
+        Load(memory, clip.Rate, clip.Samples, clip.Channels, clip.Offset, ref audio);
+
+    public static bool Load(this MemoryMappedFile memory, Arrow arrow, Icon icon)
+    {
+        var audio = arrow.Audio;
+        if (icon.Tags.HasFlag(arrow.Tags) && memory.Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, ref audio))
+        {
+            arrow.Audio = audio;
+            arrow.Source.clip = arrow.Audio;
+            arrow.Source.Play();
+            arrow.Icons.sound = icon;
+            return true;
+        }
+        else return false;
+    }
 
     public static int Write(Process process, Func<int, State> get)
     {

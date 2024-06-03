@@ -303,7 +303,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Tags
-      value: 8
+      value: 16
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Color
@@ -564,7 +564,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Tags
-      value: 16
+      value: 32
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Color
@@ -982,7 +982,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Tags
-      value: 32
+      value: 64
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Color
@@ -1333,7 +1333,7 @@ AudioSource:
   m_PlayOnAwake: 0
   m_Volume: 1
   m_Pitch: 1
-  Loop: 0
+  Loop: 1
   Mute: 0
   Spatialize: 0
   SpatializePostEffects: 0
@@ -1429,7 +1429,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Tags
-      value: 4
+      value: 8
       objectReference: {fileID: 0}
     - target: {fileID: -2215407984342370073, guid: 7667a1e59a623c592b86cd8eabcff455, type: 3}
       propertyPath: Color
