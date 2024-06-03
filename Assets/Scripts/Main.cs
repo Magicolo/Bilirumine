@@ -63,6 +63,7 @@ public sealed class Main : MonoBehaviour
     public Arrow Down = default!;
     public Image Flash = default!;
     public Image Output = default!;
+    public AudioSource Audio = default!;
     public TMP_Text Statistics = default!;
 
     Inputs _inputs = default;
@@ -92,6 +93,7 @@ public sealed class Main : MonoBehaviour
         var clips = new ConcurrentQueue<Audiocraft.Clip>();
         StartCoroutine(UpdateFrames());
         StartCoroutine(UpdateIcons());
+        StartCoroutine(UpdateClips());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateDebug());
@@ -139,6 +141,29 @@ public sealed class Main : MonoBehaviour
             }
         }
 
+        IEnumerator UpdateClips()
+        {
+            var audio = default(AudioClip);
+            while (true)
+            {
+                if (_inputs.Space.Take()) Audiocraft.Write(audiocraft.process, version => new()
+                {
+                    Version = version,
+                    Prompts = new[] { "tubular bells" },
+                });
+                if (clips.TryDequeue(out var clip) && audiocraft.memory.Load(clip, ref audio))
+                {
+                    Audio.clip = audio;
+                    Audio.Play();
+                    // if (clips.Count > 10)
+                    // {
+                    //     // TODO: Pause generation.
+                    // }
+                }
+                yield return null;
+            }
+        }
+
         IEnumerator UpdateDelta()
         {
             while (true)
@@ -177,7 +202,6 @@ Resolution: {resolutions.width}x{resolutions.height}";
             }
         }
 
-
         IEnumerator UpdateState()
         {
             var speed = 3.75f;
@@ -210,8 +234,6 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
                 UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
-                AudioClip.Create("A", 80000, 1, 16000, true, samples => { });
-                if (_inputs.Space.Take()) GenerateIcons(0, positive, negative);
                 switch ((choice.chosen, icons.arrows.FirstOrDefault(arrow => arrow.Moving)))
                 {
                     // Begin choice.

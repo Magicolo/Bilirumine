@@ -45,10 +45,10 @@ public static class Audiocraft
 
     public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("audiocraft"), Utility.Memory("audio"));
 
-    public static bool Load(this MemoryMappedFile memory, int rate, int samples, int channels, int offset, ref AudioClip? clip)
+    public static bool Load(this MemoryMappedFile memory, int rate, int samples, int channels, int offset, ref AudioClip? audio)
     {
-        if (clip == null || clip.samples != samples || clip.channels != channels)
-            clip = AudioClip.Create("audio", samples, channels, rate, false);
+        if (audio == null || audio.samples != samples || audio.channels != channels)
+            audio = AudioClip.Create("", samples, channels, rate, false);
 
         using (var access = memory.CreateViewAccessor())
         {
@@ -63,7 +63,7 @@ public static class Audiocraft
                         Error("Failed to acquire pointer to shared memory.");
                         return false;
                     }
-                    clip.SetData(new ReadOnlySpan<float>(pointer + offset, samples * channels), 0);
+                    audio.SetData(new ReadOnlySpan<float>(pointer + offset, samples * channels), 0);
                 }
                 finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
             }
@@ -71,6 +71,8 @@ public static class Audiocraft
         return true;
     }
 
+    public static bool Load(this MemoryMappedFile memory, Clip clip, ref AudioClip? audio) =>
+        memory.Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, ref audio);
 
     public static int Write(Process process, Func<int, State> get)
     {
