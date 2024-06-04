@@ -49,7 +49,14 @@ services:
       dockerfile: ./Ollama
     environment:
       - OLLAMA_KEEP_ALIVE=-1
+      - OLLAMA_MAX_VRAM=3750000000
     ports:
       - 11432:11434
     volumes:
       - ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [ gpu ]
+              device_ids: ['1']

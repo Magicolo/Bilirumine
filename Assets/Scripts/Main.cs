@@ -12,6 +12,7 @@ using UnityEngine.UI;
 using Debug = UnityEngine.Debug;
 using Random = UnityEngine.Random;
 using System.Collections.Generic;
+using UnityEngine.Rendering.PostProcessing;
 
 /*
     TODO
@@ -69,6 +70,7 @@ public sealed class Main : MonoBehaviour
     public AudioSource Shine = default!;
     public AudioSource Shatter = default!;
     public TMP_Text Statistics = default!;
+    public PostProcessProfile Bloom = default!;
 
     Inputs _inputs = default;
     Comfy.Frame _frame = new();
@@ -252,6 +254,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Negative = negative,
                 Full = true,
             };
+            var bloom = Bloom.GetSetting<Bloom>();
             var clip = new Audiocraft.State() { Tags = Tags.Clip, Duration = 10f };
             var loop = Comfy.Write(comfy.process, version => frame with { Version = version, Empty = true, Positive = positive });
             Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
@@ -275,6 +278,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     // Begin choice.
                     case (null, { Icons: ({ } image, { } sound) } moving):
                         _play = false;
+                        Rumble.Play();
+                        Shine.Play();
                         moving.Sound.Play();
                         choice.chosen = moving;
                         choice.positive = $"{styles} ({moving.Color}) {image.Description}";
@@ -311,18 +316,28 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     // Continue choice.
                     case ({ Chosen: false } chosen, var moving) when chosen == moving:
                         _play = false;
+                        Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.25f, Time.deltaTime * speed);
+                        Shine.volume = Mathf.Lerp(Shine.volume, (chosen.Time - 3.75f) / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
                         Sound.volume = Mathf.Lerp(Sound.volume, 0f, Time.deltaTime * speed);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, Mathf.Max((chosen.Time - 3.75f) * 5f, 0f), Time.deltaTime * speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 2.5f, Time.deltaTime * speed);
                         break;
                     // End choice.
                     case ({ Chosen: true } chosen, var moving) when chosen == moving:
                         if (_begin >= choice.version)
                         {
                             Debug.Log($"MAIN: End choice '{choice}'.");
-                            Flash.color = Flash.color.With(a: 1f);
                             _play = true;
                             _cancel.Add(loop);
+                            Flash.color = Flash.color.With(a: 1f);
+                            Rumble.Stop();
+                            Shatter.Play();
+                            bloom.intensity.value = 10f;
+                            bloom.color.value = chosen.Color.Color() * 10f;
                             Comfy.Write(comfy.process, version => new() { Version = version, Cancel = new[] { loop } });
+                            // TODO: Improve this.
+                            Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
                             // Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { choice.prompt } });
                             loop = choice.version;
                             positive = choice.positive;
@@ -337,6 +352,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         Debug.Log($"MAIN: Cancel choice '{choice}'.");
                         _play = true;
                         _cancel.Add(choice.version);
+                        Rumble.Stop();
                         Comfy.Write(comfy.process, version => new() { Version = version, Resume = new[] { loop }, Cancel = new[] { choice.version } });
                         choice = (0, positive, prompt, null);
                         break;
@@ -344,6 +360,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         _play = true;
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
                         Sound.volume = Mathf.Lerp(Sound.volume, 1f, Time.deltaTime * speed);
+                        Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.1f, Time.deltaTime);
+                        Shine.volume = Mathf.Lerp(Shine.volume, 0f, Time.deltaTime);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, 0f, Time.deltaTime * speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, Color.white, Time.deltaTime * speed);
                         break;
                 }
                 yield return null;

@@ -15,9 +15,6 @@ public struct Socket
 
 public enum Colors
 {
-    Cyan,
-    Orange,
-    Purple,
     Green,
     White,
     Red,

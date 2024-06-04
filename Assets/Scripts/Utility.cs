@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 using System.Linq;
+using System;
 
 public static class Utility
 {
@@ -84,6 +85,15 @@ public static class Utility
         Application.quitting += () => { try { client.Dispose(); } catch { } };
         return client;
     }
+
+    public static Color Color(this Colors color) => color switch
+    {
+        Colors.Green => UnityEngine.Color.green,
+        Colors.White => UnityEngine.Color.white,
+        Colors.Red => UnityEngine.Color.red,
+        Colors.Yellow => UnityEngine.Color.yellow,
+        _ => throw new InvalidOperationException(),
+    };
 
     public static string Styles(params string[] styles) => Styles(1f, styles);
     public static string Styles(float strength, params string[] styles) => Styles(styles.Select(style => (style, strength)));

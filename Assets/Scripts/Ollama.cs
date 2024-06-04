@@ -112,19 +112,19 @@ You are a divergent, creative and eccentric artist that excels in telling master
 The descriptions may be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning: '{inspire}'.
 It must follow narratively from the previous descriptions.
 Write a json object with strictly the following properties:
-    ""image"": string of maximum 10 words that describes an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
-    ""sound"": string of maximum 10 words that describes the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rythms and music styles inspired by '{sound}'";
+    ""image"": string of a short succinct summary description of maximum 10 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
+    ""sound"": string of a short succinct summary description of maximum 10 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rythms and music styles inspired by '{sound}'";
         while (true)
         {
             try
             {
                 var json = JsonUtility.ToJson(new Request
                 {
-                    model = "phi3",
+                    model = "llama3",
                     prompt = prompt,
                     stream = false,
                     format = "json",
-                    options = new() { temperature = 1f, num_predict = 250, top_k = 100, top_p = 0.95f }
+                    options = new() { temperature = 1f, num_predict = 1000, top_k = 100, top_p = 0.95f }
                 });
                 Log($"Sending request '{json}'.");
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
