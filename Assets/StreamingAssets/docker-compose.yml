@@ -34,7 +34,7 @@ services:
       - ./input:/input
       - ~/Projects/ai/audiocraft/audiocraft:/audiocraft
       - audiocraft:/root/.cache
-    entrypoint: python /input/audio.py
+    entrypoint: python /input/sound.py
     deploy:
       resources:
         reservations:
@@ -47,6 +47,8 @@ services:
     build: 
       context: .
       dockerfile: ./Ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
     ports:
       - 11432:11434
     volumes:

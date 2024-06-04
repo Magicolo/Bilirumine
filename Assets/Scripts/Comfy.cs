@@ -84,8 +84,8 @@ public static class Comfy
 ""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],
 ""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],
 ""empty"":{(Empty ? "True" : "False")},
-""positive"":""{Utility.Escape(Positive)}"",
-""negative"":""{Utility.Escape(Negative)}"",
+""positive"":""{Positive?.Escape()}"",
+""negative"":""{Negative?.Escape()}"",
 ""load"":""{Load}"",
 ""next"":{Next?.ToString() ?? "None"}
 }}".Replace("\n", "").Replace("\r", "");
@@ -186,9 +186,4 @@ public static class Comfy
     public static void Log(string message) => Debug.Log($"COMFY: {message}");
     public static void Warn(string message) => Debug.LogWarning($"COMFY: {message}");
     public static void Error(string message) => Debug.LogError($"COMFY: {message}");
-
-    public static string Styles(params string[] styles) => Styles(1f, styles);
-    public static string Styles(float strength, params string[] styles) => Styles(styles.Select(style => (style, strength)));
-    public static string Styles(params (string style, float strength)[] styles) => Styles(styles.AsEnumerable());
-    public static string Styles(IEnumerable<(string style, float strength)> styles) => string.Join(" ", styles.Select(pair => pair.strength == 1f ? $"({pair.style})" : $"({pair.style}:{pair.strength})"));
 }

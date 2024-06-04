@@ -22,6 +22,7 @@ public static class Audiocraft
         public int Offset;
         public int Size;
         public int Generation;
+        public float Duration;
         public string[]? Prompts;
         public int[]? Cancel;
         public int[]? Pause;
@@ -34,7 +35,8 @@ public static class Audiocraft
 ""offset"":{Offset},
 ""size"":{Size},
 ""generation"":{Generation},
-""prompts"":[{string.Join(",", Prompts.Select(prompt => $@"""{Utility.Escape(prompt)}""") ?? Array.Empty<string>())}],
+""duration"":{Duration},
+""prompts"":[{string.Join(",", Prompts.Select(prompt => $@"""{prompt.Escape()}""") ?? Array.Empty<string>())}],
 ""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],
 ""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],
 ""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}]
@@ -68,7 +70,7 @@ public static class Audiocraft
         public string Description = "";
     }
 
-    public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("audiocraft"), Utility.Memory("audio"));
+    public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("audiocraft"), Utility.Memory("sound"));
 
     public static bool Load(this MemoryMappedFile memory, int rate, int samples, int channels, int offset, ref AudioClip? audio)
     {
@@ -105,8 +107,8 @@ public static class Audiocraft
         if (icon.Tags.HasFlag(arrow.Tags) && memory.Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, ref audio))
         {
             arrow.Audio = audio;
-            arrow.Source.clip = arrow.Audio;
-            arrow.Source.Play();
+            arrow.Sound.clip = arrow.Audio;
+            arrow.Sound.Play();
             arrow.Icons.sound = icon;
             return true;
         }

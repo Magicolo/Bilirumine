@@ -64,7 +64,10 @@ public sealed class Main : MonoBehaviour
     public Arrow Down = default!;
     public Image Flash = default!;
     public Image Output = default!;
-    public AudioSource Source = default!;
+    public AudioSource Sound = default!;
+    public AudioSource Rumble = default!;
+    public AudioSource Shine = default!;
+    public AudioSource Shatter = default!;
     public TMP_Text Statistics = default!;
 
     Inputs _inputs = default;
@@ -76,6 +79,7 @@ public sealed class Main : MonoBehaviour
 
     IEnumerator Start()
     {
+        var arduino = Arduino.Create();
         var comfy = Comfy.Create();
         var audiocraft = Audiocraft.Create();
         var ollama = Ollama.Create();
@@ -98,6 +102,7 @@ public sealed class Main : MonoBehaviour
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateDebug());
+        StartCoroutine(UpdateSerial());
 
         foreach (var item in Utility.Wait(ComfyOutput(), AudiocraftOutput()))
         {
@@ -139,13 +144,9 @@ public sealed class Main : MonoBehaviour
             {
                 if (clips.TryDequeue(out var clip) && audiocraft.memory.Load(clip, ref load))
                 {
-                    Source.clip = load;
-                    Source.Play();
+                    Sound.clip = load;
+                    Sound.Play();
                     (main, load) = (load, main);
-                    // if (clips.Count > 10)
-                    // {
-                    //     // TODO: Pause generation.
-                    // }
                 }
                 yield return null;
             }
@@ -180,6 +181,34 @@ public sealed class Main : MonoBehaviour
             }
         }
 
+        IEnumerator UpdateSerial()
+        {
+            var buffer = new byte[5];
+            var inputs = new bool[4];
+            while (arduino is { })
+            {
+                if (arduino.BytesToRead >= buffer.Length)
+                {
+                    arduino.Read(buffer, 0, buffer.Length);
+                    if (buffer[4] < byte.MaxValue)
+                    {
+                        while (arduino.ReadByte() < byte.MaxValue)
+                        {
+                            Arduino.Log("Adjusting serial buffer.");
+                            yield return null;
+                        }
+                    }
+                    else if (inputs[0].Change(buffer[0] > 0)) _inputs._1 = inputs[0];
+                    else if (inputs[1].Change(buffer[1] > 0)) _inputs._2 = inputs[1];
+                    else if (inputs[2].Change(buffer[2] > 0)) _inputs._3 = inputs[2];
+                    else if (inputs[3].Change(buffer[3] > 0)) _inputs._4 = inputs[3];
+
+                    if (inputs.Any(input => input)) Arduino.Log(string.Join(", ", inputs));
+                }
+                yield return null;
+            }
+        }
+
         IEnumerator UpdateDebug()
         {
             var show = Application.isEditor;
@@ -206,10 +235,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
         IEnumerator UpdateState()
         {
             var speed = 3.75f;
-            var styles = Comfy.Styles("ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant");
+            var styles = Utility.Styles("ultra detailed", "oil painting", "abstract", "conceptual", "hyper realistic", "vibrant");
             var positive = $"void";
             var prompt = "void";
-            var negative = Comfy.Styles("nude", "naked", "nudity", "youth", "child", "children", "blurry", "worst quality", "low detail");
+            var negative = Utility.Styles("nude", "naked", "nudity", "youth", "child", "children", "blurry", "worst quality", "low detail");
             var frame = new Comfy.State()
             {
                 Tags = Tags.Frame,
@@ -223,11 +252,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Negative = negative,
                 Full = true,
             };
-            var clip = new Audiocraft.State() { Tags = Tags.Clip };
+            var clip = new Audiocraft.State() { Tags = Tags.Clip, Duration = 10f };
             var loop = Comfy.Write(comfy.process, version => frame with { Version = version, Empty = true, Positive = positive });
             Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
-            GenerateIcons(0, positive, negative);
-
+            var previous = GenerateIcons(0, positive, negative, Task.FromResult(Array.Empty<Ollama.Generation>()));
             var view = Canvas.LocalRectangle();
             var choice = (version: 0, positive, prompt, chosen: default(Arrow));
             while (true)
@@ -247,7 +275,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     // Begin choice.
                     case (null, { Icons: ({ } image, { } sound) } moving):
                         _play = false;
-                        moving.Source.Play();
+                        moving.Sound.Play();
                         choice.chosen = moving;
                         choice.positive = $"{styles} ({moving.Color}) {image.Description}";
                         choice.prompt = $"({moving.Color}) {sound.Description}";
@@ -284,7 +312,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     case ({ Chosen: false } chosen, var moving) when chosen == moving:
                         _play = false;
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
-                        Source.volume = Mathf.Lerp(Source.volume, 0f, Time.deltaTime * speed);
+                        Sound.volume = Mathf.Lerp(Sound.volume, 0f, Time.deltaTime * speed);
                         break;
                     // End choice.
                     case ({ Chosen: true } chosen, var moving) when chosen == moving:
@@ -300,7 +328,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             positive = choice.positive;
                             prompt = choice.prompt;
                             choice = (0, positive, prompt, null);
-                            GenerateIcons(loop, positive, negative);
+                            previous = GenerateIcons(loop, positive, negative, previous);
                             foreach (var arrow in arrows.components) arrow.Hide();
                         }
                         break;
@@ -315,34 +343,23 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     case (null, null):
                         _play = true;
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
-                        Source.volume = Mathf.Lerp(Source.volume, 1f, Time.deltaTime * speed);
+                        Sound.volume = Mathf.Lerp(Sound.volume, 1f, Time.deltaTime * speed);
                         break;
                 }
                 yield return null;
             }
 
-            Task GenerateIcons(int end, string positive, string negative) => Task.WhenAll(arrows.components.Select(async arrow =>
+            Task<Ollama.Generation[]> GenerateIcons(int end, string positive, string negative, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.components.Select(async arrow =>
             {
                 var random = new System.Random();
-                var prompt = $@"
-Previous image description: '{arrow.Icons.image?.Description}'
-
-You are a divergent, creative and eccentric artist that excels in telling masterful and powerful impromptu stories through image descriptions.
-Write a short succinct summary description of the next wildly surreal impossible creative image.
-Its themes must metaphorically loosely partially vaguely be related to the connotations and poetic imagery of the color '{arrow.Color}'.
-It must follow narratively and constrastively from the previous image description.
-It must include an exotic, bizarre, wonderful and nice visual style.
-Avoid clichés and favor weird, putrid, uncanny, composite, out-of-this-world and unsettling subjects, environments and themes.
-Your answer must strictly consist of visual styles and an image description of maximum 50 words; nothing else; no salutation, no word count, no acknowledgement, no introduction; just the description.";
-                // TODO: Prompt for an image description, a music description, and an ambiance description as a json object.
-                var description = await ollama.client.Generate(prompt);
+                var generation = await ollama.client.Generate(arrow.Color, await previous);
                 while (_end < end) await Task.Delay(100);
 
                 Comfy.Write(comfy.process, version =>
                 {
                     var tags = Tags.Icon | arrow.Tags;
-                    var positive = $"{Comfy.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {description}";
-                    arrows.images.map.TryAdd((version, tags), description);
+                    var positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {generation.Image}";
+                    arrows.images.map.TryAdd((version, tags), generation.Image);
                     return new()
                     {
                         Version = version,
@@ -360,10 +377,17 @@ Your answer must strictly consist of visual styles and an image description of m
                 Audiocraft.Write(audiocraft.process, version =>
                 {
                     var tags = Tags.Icon | arrow.Tags;
-                    var prompt = $"Punchy, jingle, stinger, notification. ({arrow.Color}) {description}";
-                    arrows.sounds.map.TryAdd((version, tags), description);
-                    return new() { Version = version, Tags = tags, Prompts = new[] { prompt }, };
+                    var prompt = $"{Utility.Styles("punchy", "jingle", "stinger", "notification")} ({arrow.Color}) {generation.Sound}";
+                    arrows.sounds.map.TryAdd((version, tags), generation.Sound);
+                    return new()
+                    {
+                        Version = version,
+                        Tags = tags,
+                        Duration = 10f,
+                        Prompts = new[] { prompt },
+                    };
                 });
+                return generation;
             }));
 
             void UpdateIcon(Arrow arrow, float speed, int index, bool[] inputs, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
@@ -398,7 +422,7 @@ Your answer must strictly consist of visual styles and an image description of m
                     arrow.Shake.localScale = scale;
                 }
                 {
-                    arrow.Source.volume = Mathf.Lerp(arrow.Source.volume, move ? 1f : 0f, Time.deltaTime * speed);
+                    arrow.Sound.volume = Mathf.Lerp(arrow.Sound.volume, move ? 1f : 0f, Time.deltaTime * speed);
                     arrow.Filter.cutoffFrequency = Mathf.Lerp(arrow.Filter.cutoffFrequency, move ? 5000f : 0f, Time.deltaTime);
                 }
                 arrow.Time = hidden ? 0f : move ? arrow.Time + Time.deltaTime : 0f;

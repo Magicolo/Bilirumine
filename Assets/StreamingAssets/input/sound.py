@@ -16,7 +16,7 @@ def load(state: dict, memory: Optional[mmap.mmap] = None):
 
 
 def read(send: SimpleQueue):
-    with utility.memory("audio", mmap.ACCESS_READ) as memory:
+    with utility.memory("sound", mmap.ACCESS_READ) as memory:
         while True:
             state = utility.input()
             utility.update(state["cancel"], state["pause"], state["resume"])
@@ -27,21 +27,18 @@ def read(send: SimpleQueue):
 def process(receive: SimpleQueue, send: SimpleQueue):
     def steps(state, loaded):
         yield None
+        model.set_generation_params(duration=state["duration"])
         if loaded is None:
             clips = model.generate(state["prompts"])
         else:
+            trim = state["duration"] * rate // 100
             clips = model.generate_continuation(
                 loaded[:, :, -trim:], rate, state["prompts"]
             )
         yield (clips,)
 
-    duration = 10
-    chunk = 100
-    # # model = MAGNeT.get_pretrained("facebook/magnet-small-10secs")
-    # # model = MAGNeT.get_pretrained("facebook/audio-magnet-small")
     model = MusicGen.get_pretrained("facebook/musicgen-small")
     rate = model.sample_rate
-    trim = duration * rate // chunk
 
     for state, _, (clips,) in utility.work(receive, steps):
         state = {**state, "rate": rate}
@@ -61,7 +58,7 @@ def write(receive: SimpleQueue):
         torch.cuda.empty_cache()
         yield (samples, channels, count, offset, size, generation)
 
-    with utility.memory("audio", mmap.ACCESS_WRITE) as memory:
+    with utility.memory("sound", mmap.ACCESS_WRITE) as memory:
         for state, _, outputs in utility.work(receive, steps):
             (samples, channels, count, offset, size, generation) = outputs
             utility.output(

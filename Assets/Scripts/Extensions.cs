@@ -380,16 +380,22 @@ public static class Extensions
 
     public static bool TryRandom<T>(this IReadOnlyList<T> list, out T value, Random random = default)
     {
-        if (list.Count == 0)
+        if (list.Count == 0) { value = default; return false; }
+        else { value = list.Random(random); return true; }
+    }
+
+    public static T Random<T>(this IReadOnlyList<T> list, Random random = default)
+    {
+        random ??= _random;
+        return list[random.Next(0, list.Count)];
+    }
+
+    public static IEnumerable<T> Random<T>(this IReadOnlyList<T> list, int count, Random random = default)
+    {
+        for (int i = 0; i < count; i++)
         {
-            value = default;
-            return false;
-        }
-        else
-        {
-            random ??= _random;
-            value = list[random.Next(0, list.Count)];
-            return true;
+            if (list.TryRandom(out var item, random)) yield return item;
+            else yield break;
         }
     }
 

@@ -4,15 +4,18 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Ports;
 using System.IO.MemoryMappedFiles;
 using System.Net.Http;
 using System.Threading.Tasks;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
+using System.Linq;
 
 public static class Utility
 {
-    public static string? Escape(string? value) => value?.Replace(@"""", @"\""");
+    public static string Escape(this string value) => value.Replace(@"""", @"\""");
+    public static string Sanitize(this string value) => value.Replace('\n', ' ').Replace('\r', ' ').Replace('(', '<').Replace(')', '>');
 
     public static MemoryMappedFile Memory(string name)
     {
@@ -22,6 +25,14 @@ public static class Utility
         Application.quitting += () => { try { memory.Dispose(); } catch { } };
         Application.quitting += () => { try { File.Delete(path); } catch { } };
         return memory;
+    }
+
+    public static SerialPort Serial(string name, int rate)
+    {
+        var port = new SerialPort(name, rate);
+        Application.quitting += () => { try { port.Close(); } catch { } };
+        port.Open();
+        return port;
     }
 
     public static string Cache()
@@ -73,6 +84,11 @@ public static class Utility
         Application.quitting += () => { try { client.Dispose(); } catch { } };
         return client;
     }
+
+    public static string Styles(params string[] styles) => Styles(1f, styles);
+    public static string Styles(float strength, params string[] styles) => Styles(styles.Select(style => (style, strength)));
+    public static string Styles(params (string style, float strength)[] styles) => Styles(styles.AsEnumerable());
+    public static string Styles(IEnumerable<(string style, float strength)> styles) => string.Join(" ", styles.Select(pair => pair.strength == 1f ? $"({pair.style})" : $"({pair.style}:{pair.strength})"));
 
     public static IEnumerable Wait(Task task)
     {

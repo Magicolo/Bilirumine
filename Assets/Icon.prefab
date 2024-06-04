@@ -199,7 +199,7 @@ GameObject:
   - component: {fileID: 6464867171174227069}
   - component: {fileID: 2532358223957449687}
   m_Layer: 5
-  m_Name: Audio
+  m_Name: Sound
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -239,7 +239,7 @@ AudioSource:
   m_PlayOnAwake: 0
   m_Volume: 1
   m_Pitch: 1
-  Loop: 1
+  Loop: 0
   Mute: 0
   Spatialize: 0
   SpatializePostEffects: 0
@@ -528,7 +528,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Tags: 0
   Color: 0
-  Themes: []
   Direction: {x: 0, y: 0}
   Rectangle: {fileID: 4952340939179153075}
   Shake: {fileID: 7187845427739818385}
@@ -538,7 +537,7 @@ MonoBehaviour:
     Close: {fileID: 6449686526924220932}
   Image: {fileID: 6467919843167995612}
   Content: {fileID: 4275497638459112806}
-  Source: {fileID: 6464867171174227069}
+  Sound: {fileID: 6464867171174227069}
   Filter: {fileID: 2532358223957449687}
 --- !u!1 &8817453101054994680
 GameObject:

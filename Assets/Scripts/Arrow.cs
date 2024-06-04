@@ -45,14 +45,13 @@ public sealed class Arrow : MonoBehaviour
 
     public Tags Tags;
     public Colors Color;
-    public string[] Themes = { };
     public Vector2Int Direction;
     public RectTransform Rectangle = default!;
     public RectTransform Shake = default!;
     public Socket Socket = default!;
     public Image Image = default!;
     public Mask Content = default!;
-    public AudioSource Source = default!;
+    public AudioSource Sound = default!;
     public AudioLowPassFilter Filter = default!;
 
     public (Comfy.Icon? image, Audiocraft.Icon? sound) Icons;
