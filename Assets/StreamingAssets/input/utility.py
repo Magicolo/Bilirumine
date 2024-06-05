@@ -1,6 +1,6 @@
 import sys, os, threading, ast, random, mmap
 from queue import SimpleQueue, Empty
-from typing import Optional
+from typing import Optional, Tuple
 
 
 def seed():
@@ -66,18 +66,29 @@ def memory(name: str, access: int):
 
 
 def read(memory: mmap.mmap, offset: int, size: int, generation: int) -> Optional[bytes]:
-    global INDEX, GENERATION
-    if size > 0:
-        if offset < INDEX or generation == GENERATION:
-            memory.seek(offset)
-            return memory.read(size)
-    return None
+    global INDEX, CAPACITY, GENERATION, MEMORY_LOCK
+
+    if size <= 0 or offset + size > CAPACITY:
+        return None
+
+    with MEMORY_LOCK:
+        age = GENERATION - generation
+        if age > 1 or age < 0:
+            return None
+        elif age == 1 and INDEX > offset:
+            return None
+
+    memory.seek(offset)
+    return memory.read(size)
 
 
-def write(memory: mmap.mmap, bytes: bytes) -> int:
+def write(memory: mmap.mmap, bytes: bytes) -> Tuple[int, int, int]:
     global INDEX, CAPACITY, GENERATION, MEMORY_LOCK
 
     size = len(bytes)
+    if size <= 0:
+        return (0, 0, 0)
+
     with MEMORY_LOCK:
         if INDEX + size > CAPACITY:
             offset, INDEX = 0, 0
@@ -86,6 +97,7 @@ def write(memory: mmap.mmap, bytes: bytes) -> int:
             offset = INDEX
         INDEX += size
         generation = GENERATION
+
     memory.seek(offset)
     return offset, memory.write(bytes), generation
 

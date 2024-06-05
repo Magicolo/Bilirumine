@@ -95,6 +95,39 @@ public static class Utility
         _ => throw new InvalidOperationException(),
     };
 
+    public static bool Chain(AudioSource from, AudioSource to, float volume, float fade)
+    {
+        if (from is { clip: null } or { isPlaying: false })
+        {
+            to.volume = volume;
+            to.Play();
+            return true;
+        }
+
+        var remain = from.clip.length - from.time;
+        var start = fade - remain;
+        if (start > 0f)
+        {
+            var ratio = fade <= 0f ? 1f : Mathf.Clamp01(start / fade);
+            from.volume = Mathf.Cos(ratio * Mathf.PI * 0.5f) * volume;
+            to.volume = Mathf.Sin(ratio * Mathf.PI * 0.5f) * volume;
+
+            if (!to.isPlaying)
+            {
+                to.Play();
+                to.time = start;
+            }
+            if (ratio >= 1f)
+            {
+                from.volume = 0f;
+                to.volume = volume;
+                return true;
+            }
+        }
+        else if (to.isPlaying) to.Stop();
+        return false;
+    }
+
     public static string Styles(params string[] styles) => Styles(1f, styles);
     public static string Styles(float strength, params string[] styles) => Styles(styles.Select(style => (style, strength)));
     public static string Styles(params (string style, float strength)[] styles) => Styles(styles.AsEnumerable());

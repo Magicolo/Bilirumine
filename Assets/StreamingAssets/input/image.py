@@ -202,7 +202,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
             ckpt_name="rife49.pth",
             frames=interpolated,
             clear_cache_after_n_frames=1000,
-            multiplier=18,
+            multiplier=12,
             fast_mode=True,
             ensemble=True,
             scale_factor=1,

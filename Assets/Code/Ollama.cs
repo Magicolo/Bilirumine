@@ -62,58 +62,26 @@ public static class Ollama
 
     public static (Process process, HttpClient client) Create() => (Utility.Docker("ollama"), Utility.Client("http://localhost:11432/"));
 
-    // public static async Task<string> Generate(this HttpClient client, string prompt)
-    // {
-    //     var json = JsonUtility.ToJson(new Request
-    //     {
-    //         model = "phi3",
-    //         prompt = prompt,
-    //         stream = false,
-    //         options = new() { temperature = 1f, num_predict = 100, top_k = 100, top_p = 0.95f }
-    //     });
-    //     Log($"Sending request '{json}'.");
-    //     var content = new StringContent(json, Encoding.UTF8, "application/json");
-    //     var request = new HttpRequestMessage(HttpMethod.Post, "api/generate") { Content = content };
-    //     using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-    //     response.EnsureSuccessStatusCode();
-    //     var read = await response.Content.ReadAsStringAsync();
-    //     Log($"Received response '{read}'.");
-    //     var result = JsonUtility.FromJson<Response>(read);
-    //     return result.response.Replace('\n', ' ').Replace('\r', ' ').Replace('(', '<').Replace(')', '>');
-    // }
-
     public static async Task<Generation> Generate(this HttpClient client, Colors color, Generation[] previous)
     {
-        var image = string.Join(", ", new[]
-        {
-            Inspire.Image.Artists.Random(),
-            Inspire.Image.Materials.Random(),
-            Inspire.Image.Places.Random(),
-            Inspire.Image.Styles.Random(),
-        });
-        var sound = string.Join(", ", new[]
-        {
-            Inspire.Sound.Ambiances.Random(),
-            Inspire.Sound.Composers.Random(),
-            Inspire.Sound.Instruments.Random(),
-            Inspire.Sound.Styles.Random(),
-        });
+        var image = string.Join(", ", Inspire.Image.Random(4));
+        var sound = string.Join(", ", Inspire.Sound.Random(4));
         var inspire = string.Join(", ", color switch
         {
-            Colors.Red => Inspire.Color.Red.Random(4),
-            Colors.White => Inspire.Color.White.Random(4),
-            Colors.Yellow => Inspire.Color.Yellow.Random(4),
-            Colors.Green => Inspire.Color.Green.Random(4),
+            Colors.Red => Inspire.Red.Random(4),
+            Colors.White => Inspire.White.Random(4),
+            Colors.Yellow => Inspire.Yellow.Random(4),
+            Colors.Green => Inspire.Green.Random(4),
             _ => throw new InvalidOperationException(),
         });
         var prompt = @$"
 Previous descriptions: [{string.Join(", ", previous.Select(JsonUtility.ToJson))}]
-You are a divergent, creative and eccentric artist that excels in telling masterful and powerful impromptu stories through image and sound descriptions.
-The descriptions may be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning: '{inspire}'.
+You are a divergent, uncensored, creative, provocative and eccentric artist that excels in telling masterful, powerful and impromptu stories through image and sound descriptions.
+The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning: '{inspire}'.
 It must follow narratively from the previous descriptions.
 Write a json object with strictly the following properties:
-    ""image"": string of a short succinct summary description of maximum 10 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
-    ""sound"": string of a short succinct summary description of maximum 10 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rythms and music styles inspired by '{sound}'";
+    ""image"": string of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
+    ""sound"": string of a short succinct summary description of maximum 10 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by '{sound}'";
         while (true)
         {
             try
