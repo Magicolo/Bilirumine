@@ -19,10 +19,12 @@ public static class Audiocraft
         public int Version;
         public Tags Tags;
         public bool Loop;
+        public bool Empty;
         public int Offset;
         public int Size;
         public int Generation;
         public float Duration;
+        public float Overlap;
         public string[]? Prompts;
         public int[]? Cancel;
         public int[]? Pause;
@@ -32,11 +34,13 @@ public static class Audiocraft
 ""version"":{Version},
 ""tags"":{(int)Tags},
 ""loop"":{(Loop ? "True" : "False")},
+""empty"":{(Empty ? "True" : "False")},
 ""offset"":{Offset},
 ""size"":{Size},
 ""generation"":{Generation},
 ""duration"":{Duration},
-""prompts"":[{string.Join(",", Prompts.Select(prompt => $@"""{prompt.Escape()}""") ?? Array.Empty<string>())}],
+""overlap"":{Overlap},
+""prompts"":[{string.Join(",", Prompts?.Select(prompt => $@"""{prompt.Escape()}""") ?? Array.Empty<string>())}],
 ""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],
 ""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],
 ""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}]
@@ -48,6 +52,7 @@ public static class Audiocraft
         public int Version;
         public Tags Tags;
         public int Rate;
+        public float Overlap;
         public int Samples;
         public int Channels;
         public int Index;
@@ -55,6 +60,8 @@ public static class Audiocraft
         public int Offset;
         public int Size;
         public int Generation;
+
+        public float Duration => (float)Samples / Rate;
     }
 
     public sealed record Icon

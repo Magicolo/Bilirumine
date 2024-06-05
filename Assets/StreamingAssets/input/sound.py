@@ -3,16 +3,16 @@ from typing import Optional
 from queue import SimpleQueue
 
 sys.path.append("/audiocraft")
-from audiocraft.models import MusicGen, MAGNeT
+from audiocraft.models import MusicGen
 
 
 def load(state: dict, memory: Optional[mmap.mmap] = None):
     if memory and state["size"] and state["generation"]:
         data = utility.read(memory, state["offset"], state["size"], state["generation"])
-        loaded = torch.frombuffer(data, dtype=torch.float32)
-        loaded = loaded.reshape(1, 1, len(loaded))
-    else:
-        loaded = None
+        if data is not None:
+            loaded = torch.frombuffer(data, dtype=torch.float32)
+            loaded = loaded.reshape(1, 1, len(loaded))
+            return loaded
 
 
 def read(send: SimpleQueue):
@@ -21,6 +21,8 @@ def read(send: SimpleQueue):
             state = utility.input()
             utility.update(state["cancel"], state["pause"], state["resume"])
             loaded = load(state, memory)
+            if loaded is None and not state["empty"]:
+                continue
             send.put((state, loaded), block=False)
 
 
@@ -31,17 +33,15 @@ def process(receive: SimpleQueue, send: SimpleQueue):
         if loaded is None:
             clips = model.generate(state["prompts"])
         else:
-            trim = state["duration"] * rate // 100
+            trim = int(state["duration"] * state["overlap"] * RATE)
             clips = model.generate_continuation(
-                loaded[:, :, -trim:], rate, state["prompts"]
+                loaded[:, :, -trim:], RATE, state["prompts"]
             )
         yield (clips,)
 
     model = MusicGen.get_pretrained("facebook/musicgen-small")
-    rate = model.sample_rate
 
     for state, _, (clips,) in utility.work(receive, steps):
-        state = {**state, "rate": rate}
         send.put((state, clips), block=False)
         if state["loop"]:
             receive.put((state, clips), block=False)
@@ -62,10 +62,11 @@ def write(receive: SimpleQueue):
         for state, _, outputs in utility.work(receive, steps):
             (samples, channels, count, offset, size, generation) = outputs
             utility.output(
-                f'{state["version"]},{state["tags"]},{state["rate"]},{samples},{channels},{count},{offset},{size},{generation}'
+                f'{state["version"]},{state["tags"]},{state["overlap"]},{RATE},{samples},{channels},{count},{offset},{size},{generation}'
             )
 
 
+RATE = 32000
 a = SimpleQueue()
 b = SimpleQueue()
 threads = [

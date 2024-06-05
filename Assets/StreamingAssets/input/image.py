@@ -23,11 +23,14 @@ from nodes import (
 def load(state: dict, memory: Optional[mmap.mmap] = None):
     if memory and state["size"] and state["generation"]:
         data = utility.read(memory, state["offset"], state["size"], state["generation"])
-        loaded = torch.frombuffer(data, dtype=torch.uint8)
-        loaded = loaded.to(dtype=torch.float32)
-        loaded = loaded / 255.0
-        loaded = loaded.reshape(1, *state["shape"], 3)
-    elif state["load"]:
+        if data is not None:
+            loaded = torch.frombuffer(data, dtype=torch.uint8)
+            loaded = loaded.to(dtype=torch.float32)
+            loaded = loaded / 255.0
+            loaded = loaded.reshape(1, *state["shape"], 3)
+            return loaded
+
+    if state["load"]:
         (loaded, _) = LoadImage().load_image(state["load"])
     elif state["empty"]:
         (loaded,) = EmptyImage().generate(state["width"], state["height"], 1, 0)

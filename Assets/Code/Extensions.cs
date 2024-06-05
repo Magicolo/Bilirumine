@@ -1,3 +1,5 @@
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -347,7 +349,7 @@ public static class Extensions
     }
 
     public static GameObject GameObject(this UnityEngine.Object instance) =>
-        instance as GameObject ?? (instance as Component).gameObject;
+        instance as GameObject ?? (instance as Component)!.gameObject;
 
     public static T Component<T>(this GameObject instance) where T : UnityEngine.Object =>
         instance as T ?? instance.GetComponent<T>();
@@ -373,30 +375,38 @@ public static class Extensions
         foreach (var item in source)
         {
             var value = by(item);
-            if (first.Change(false) || value.CompareTo(best.value) < 0) best = (item, value);
+            if (first.Change(false) || value.CompareTo(best.value!) < 0) best = (item, value);
         }
-        return best.item;
+        return best.item!;
     }
 
-    public static bool TryRandom<T>(this IReadOnlyList<T> list, out T value, Random random = default)
+    public static bool TryRandom<T>(this IReadOnlyList<T> list, out T value, Random? random = default)
     {
-        if (list.Count == 0) { value = default; return false; }
+        if (list.Count == 0) { value = default!; return false; }
         else { value = list.Random(random); return true; }
     }
 
-    public static T Random<T>(this IReadOnlyList<T> list, Random random = default)
+    public static T Random<T>(this IReadOnlyList<T> list, Random? random = default)
     {
         random ??= _random;
         return list[random.Next(0, list.Count)];
     }
 
-    public static IEnumerable<T> Random<T>(this IReadOnlyList<T> list, int count, Random random = default)
+    public static IEnumerable<T> Random<T>(this IReadOnlyList<T> list, int count, Random? random = default)
     {
         for (int i = 0; i < count; i++)
         {
             if (list.TryRandom(out var item, random)) yield return item;
             else yield break;
         }
+    }
+
+    public static void PlayWith(this AudioSource source, (float minimum, float maximum)? volume = null, (float minimum, float maximum)? pitch = null, Random? random = default)
+    {
+        random ??= _random;
+        source.volume = volume switch { (float minimum, float maximum) => random.NextFloat(minimum, maximum), _ => source.volume };
+        source.pitch = pitch switch { (float minimum, float maximum) => random.NextFloat(minimum, maximum), _ => source.pitch };
+        source.Play();
     }
 
     public static HashSet<T> ToSet<T>(this IEnumerable<T> source) => new(source);
@@ -512,7 +522,7 @@ public static class Extensions
         }
         else
         {
-            item = default;
+            item = default!;
             return false;
         }
     }
@@ -530,7 +540,7 @@ public static class Extensions
         }
         else
         {
-            item = default;
+            item = default!;
             return false;
         }
     }
@@ -542,7 +552,7 @@ public static class Extensions
             item = list[i];
             if (predicate(item)) return true;
         }
-        item = default;
+        item = default!;
         return false;
     }
 }

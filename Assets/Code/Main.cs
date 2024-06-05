@@ -16,6 +16,7 @@ using UnityEngine.Rendering.PostProcessing;
 
 /*
     TODO
+    - Save the last prompts/positive to be able to resume between sessions and preserve the user path.
     - Generate an ambiance with 'MagNet'.
     - Generate music in smaller chunks to favor diversity and dynamism.
     - Make the prompt LLM generate more diverse visual styles and subjects.
@@ -65,7 +66,10 @@ public sealed class Main : MonoBehaviour
     public Arrow Down = default!;
     public Image Flash = default!;
     public Image Output = default!;
-    public AudioSource Sound = default!;
+    public AudioSource In = default!;
+    public AudioSource Out = default!;
+    public AudioSource Select = default!;
+    public AudioSource Cancel = default!;
     public AudioSource Rumble = default!;
     public AudioSource Shine = default!;
     public AudioSource Shatter = default!;
@@ -77,6 +81,7 @@ public sealed class Main : MonoBehaviour
     bool _play = true;
     int _begin;
     int _end;
+    float _volume;
     readonly HashSet<int> _cancel = new();
 
     IEnumerator Start()
@@ -146,10 +151,29 @@ public sealed class Main : MonoBehaviour
             {
                 if (clips.TryDequeue(out var clip) && audiocraft.memory.Load(clip, ref load))
                 {
-                    Sound.clip = load;
-                    Sound.Play();
+                    In.clip = load;
+                    In.volume = 0f;
+                    In.Play();
                     (main, load) = (load, main);
+
+                    if (clips.Count < 5)
+                        Audiocraft.Write(audiocraft.process, version => new() { Version = version, Resume = new[] { clip.Version } });
+                    else if (clips.Count > 10)
+                        Audiocraft.Write(audiocraft.process, version => new() { Version = version, Pause = new[] { clip.Version } });
+
+                    var overlap = Mathf.Max(clip.Overlap * clip.Samples, 1f);
+                    while (In.timeSamples < overlap)
+                    {
+                        if (In.clip) In.volume = Mathf.Lerp(In.volume, Mathf.Clamp01(In.timeSamples / overlap) * _volume, Time.deltaTime);
+                        if (Out.clip) Out.volume = Mathf.Lerp(Out.volume, _volume - Mathf.Clamp01(Out.timeSamples / overlap) * _volume, Time.deltaTime);
+                        yield return null;
+                    }
+                    Out.Stop();
+                    (In, Out) = (Out, In);
                 }
+
+                In.volume = Mathf.Lerp(In.volume, _volume, Time.deltaTime);
+                Out.volume = Mathf.Lerp(Out.volume, _volume, Time.deltaTime);
                 yield return null;
             }
         }
@@ -254,10 +278,18 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Negative = negative,
                 Full = true,
             };
+            var clip = new Audiocraft.State()
+            {
+                Tags = Tags.Clip,
+                Loop = true,
+                Duration = 10f,
+                Overlap = 0.1f
+            };
+            var loops = (
+                image: Comfy.Write(comfy.process, version => frame with { Version = version, Empty = true, Positive = positive }),
+                sound: Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Empty = true, Prompts = new[] { prompt } })
+            );
             var bloom = Bloom.GetSetting<Bloom>();
-            var clip = new Audiocraft.State() { Tags = Tags.Clip, Duration = 10f };
-            var loop = Comfy.Write(comfy.process, version => frame with { Version = version, Empty = true, Positive = positive });
-            Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
             var previous = GenerateIcons(0, positive, negative, Task.FromResult(Array.Empty<Ollama.Generation>()));
             var view = Canvas.LocalRectangle();
             var choice = (version: 0, positive, prompt, chosen: default(Arrow));
@@ -269,18 +301,17 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
                 UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
-                // TODO: Remove this.
-                if (_inputs.Space.Take())
-                    Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
-
                 switch ((choice.chosen, arrows.components.FirstOrDefault(arrow => arrow.Moving)))
                 {
                     // Begin choice.
                     case (null, { Icons: ({ } image, { } sound) } moving):
                         _play = false;
+                        Select.PlayWith(pitch: (0.75f, 1.5f));
                         Rumble.Play();
                         Shine.Play();
                         moving.Sound.Play();
+                        bloom.intensity.value = 0f;
+                        bloom.color.value = Color.white;
                         choice.chosen = moving;
                         choice.positive = $"{styles} ({moving.Color}) {image.Description}";
                         choice.prompt = $"({moving.Color}) {sound.Description}";
@@ -299,7 +330,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                                 Steps = 5,
                                 Guidance = 6f,
                                 Denoise = 0.4f,
-                                Pause = new[] { loop },
+                                Pause = new[] { loops.image },
                                 Left = Math.Max(-moving.Direction.x, 0),
                                 Right = Math.Max(moving.Direction.x, 0),
                                 Top = Math.Max(moving.Direction.y, 0),
@@ -316,34 +347,43 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     // Continue choice.
                     case ({ Chosen: false } chosen, var moving) when chosen == moving:
                         _play = false;
+                        _volume = Mathf.Lerp(_volume, 0f, Time.deltaTime * speed);
+                        var time = Mathf.Max(chosen.Time - 3.75f, 0f);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.25f, Time.deltaTime * speed);
-                        Shine.volume = Mathf.Lerp(Shine.volume, (chosen.Time - 3.75f) / 5f, Time.deltaTime * speed);
+                        Shine.volume = Mathf.Lerp(Shine.volume, time / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
-                        Sound.volume = Mathf.Lerp(Sound.volume, 0f, Time.deltaTime * speed);
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, Mathf.Max((chosen.Time - 3.75f) * 5f, 0f), Time.deltaTime * speed);
-                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 2.5f, Time.deltaTime * speed);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 7.5f, Time.deltaTime / speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 7.5f, Time.deltaTime / speed);
                         break;
                     // End choice.
-                    case ({ Chosen: true } chosen, var moving) when chosen == moving:
+                    case ({ Chosen: true, Icons: (_, { } sound) } chosen, var moving) when chosen == moving:
                         if (_begin >= choice.version)
                         {
                             Debug.Log($"MAIN: End choice '{choice}'.");
                             _play = true;
-                            _cancel.Add(loop);
+                            _cancel.Add(loops.image);
                             Flash.color = Flash.color.With(a: 1f);
                             Rumble.Stop();
                             Shatter.Play();
-                            bloom.intensity.value = 10f;
-                            bloom.color.value = chosen.Color.Color() * 10f;
-                            Comfy.Write(comfy.process, version => new() { Version = version, Cancel = new[] { loop } });
-                            // TODO: Improve this.
-                            Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { prompt } });
-                            // Audiocraft.Write(audiocraft.process, version => clip with { Version = version, Prompts = new[] { choice.prompt } });
-                            loop = choice.version;
+                            bloom.intensity.value = 15f;
+                            bloom.color.value = chosen.Color.Color() * 15f;
+                            Comfy.Write(comfy.process, version => new() { Version = version, Cancel = new[] { loops.image } });
+                            loops.sound = Audiocraft.Write(audiocraft.process, version => clip with
+                            {
+                                Version = version,
+                                Offset = sound.Offset,
+                                Size = sound.Size,
+                                Generation = sound.Generation,
+                                // If the sound could not be loaded (ex: overwritten), allow generation from scratch.
+                                Empty = true,
+                                Cancel = new[] { loops.sound },
+                                Prompts = new[] { choice.prompt }
+                            });
+                            loops.image = choice.version;
                             positive = choice.positive;
                             prompt = choice.prompt;
                             choice = (0, positive, prompt, null);
-                            previous = GenerateIcons(loop, positive, negative, previous);
+                            previous = GenerateIcons(loops.image, positive, negative, previous);
                             foreach (var arrow in arrows.components) arrow.Hide();
                         }
                         break;
@@ -352,14 +392,15 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         Debug.Log($"MAIN: Cancel choice '{choice}'.");
                         _play = true;
                         _cancel.Add(choice.version);
+                        Cancel.PlayWith(pitch: (0.75f, 1.5f));
                         Rumble.Stop();
-                        Comfy.Write(comfy.process, version => new() { Version = version, Resume = new[] { loop }, Cancel = new[] { choice.version } });
+                        Comfy.Write(comfy.process, version => new() { Version = version, Resume = new[] { loops.image }, Cancel = new[] { choice.version } });
                         choice = (0, positive, prompt, null);
                         break;
                     case (null, null):
                         _play = true;
+                        _volume = Mathf.Lerp(_volume, 1f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
-                        Sound.volume = Mathf.Lerp(Sound.volume, 1f, Time.deltaTime * speed);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.1f, Time.deltaTime);
                         Shine.volume = Mathf.Lerp(Shine.volume, 0f, Time.deltaTime);
                         bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, 0f, Time.deltaTime * speed);
@@ -378,7 +419,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Comfy.Write(comfy.process, version =>
                 {
                     var tags = Tags.Icon | arrow.Tags;
-                    var positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {generation.Image}";
+                    var positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {generation.Image} {generation.Sound}";
                     arrows.images.map.TryAdd((version, tags), generation.Image);
                     return new()
                     {
@@ -404,6 +445,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         Version = version,
                         Tags = tags,
                         Duration = 10f,
+                        Empty = true,
                         Prompts = new[] { prompt },
                     };
                 });
@@ -413,8 +455,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
             void UpdateIcon(Arrow arrow, float speed, int index, bool[] inputs, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
             {
                 var hidden = arrows.components.Any(arrow => arrow.Hidden);
-                var move =
-                    inputs[index] &&
+                var move = !hidden && inputs[index] &&
                     inputs.Enumerate().All(pair => pair.index == index || !pair.item) &&
                     arrows.components.All(other => arrow == other || other.Idle);
                 {
@@ -431,13 +472,13 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     arrow.Socket.Close.color = color;
                 }
                 {
-                    var random = inputs[index] ? new Vector3(Random.value, Random.value) * 3.75f : Vector3.zero;
+                    var random = inputs[index] ? new Vector3(Random.value, Random.value) * 5f : Vector3.zero;
                     var shake = random * Mathf.Clamp(arrow.Time - 2.5f, 0f, 5f);
                     arrow.Shake.anchoredPosition = shake;
                 }
                 {
                     var source = arrow.Shake.localScale;
-                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time / 3.75f, 2f), 1f) : Vector3.one;
+                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time / 3.75f, 2f), 1.25f) : Vector3.one;
                     var scale = Vector3.Lerp(source, target, Time.deltaTime * speed);
                     arrow.Shake.localScale = scale;
                 }
@@ -533,6 +574,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     var splits = line.Split(",", StringSplitOptions.None);
                     var version = int.Parse(splits[index++]);
                     var tags = (Tags)int.Parse(splits[index++]);
+                    var overlap = float.Parse(splits[index++]);
                     var rate = int.Parse(splits[index++]);
                     var samples = int.Parse(splits[index++]);
                     var channels = int.Parse(splits[index++]);
@@ -547,6 +589,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Version = version,
                             Tags = tags,
                             Rate = rate,
+                            Overlap = overlap,
                             Samples = samples,
                             Channels = channels,
                             Count = count,

@@ -96,8 +96,8 @@ def update(cancel, pause, resume):
         CANCEL = CANCEL.union(cancel)
     if pause:
         PAUSE = PAUSE.union(pause)
-    if resume:
-        PAUSE = PAUSE.difference(resume)
+    if cancel or resume:
+        PAUSE = PAUSE.difference(cancel + resume)
 
 
 WAIT = 0.1
