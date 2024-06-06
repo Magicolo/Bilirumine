@@ -70,6 +70,52 @@ public static class Utility
         return process;
     }
 
+    public static bool Read<T>(this MemoryMappedFile memory, int offset, T state, Action<T, IntPtr> read) =>
+        memory.Read(offset, (state, read), static (state, pointer) => { state.read(state.state, pointer); return true; });
+
+    public static U? Read<T, U>(this MemoryMappedFile memory, int offset, T state, Func<T, IntPtr, U> read)
+    {
+        using (var access = memory.CreateViewAccessor())
+        {
+            unsafe
+            {
+                var pointer = (byte*)IntPtr.Zero;
+                try
+                {
+                    access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
+                    if (pointer == null) return default;
+                    return read(state, (IntPtr)(pointer + offset));
+                }
+                finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
+            }
+        }
+    }
+
+    public static byte[]? Read(this MemoryMappedFile memory, int offset, int size) =>
+        memory.Read(offset, size, static (size, pointer) =>
+        {
+            unsafe
+            {
+                var span = new ReadOnlySpan<byte>((void*)pointer, size);
+                return span.ToArray();
+            }
+        });
+
+    public static bool Read(this MemoryMappedFile memory, int offset, int size, Stream stream) =>
+        memory.Read(offset, (stream, size), static (state, pointer) =>
+        {
+            unsafe
+            {
+                var span = new ReadOnlySpan<byte>((void*)pointer, state.size);
+                state.stream.Write(span);
+            }
+        });
+
+    public static bool SetData(this AudioClip audio, IntPtr data, int size)
+    {
+        unsafe { return audio.SetData(new ReadOnlySpan<float>((void*)data, size), 0); }
+    }
+
     public static Process Docker(string service)
     {
         var path = Path.Join(Application.streamingAssetsPath, "docker-compose.yml");
@@ -95,12 +141,13 @@ public static class Utility
         _ => throw new InvalidOperationException(),
     };
 
-    public static bool Chain(AudioSource from, AudioSource to, float volume, float fade)
+    public static bool Chain(AudioSource from, AudioSource to, float volume, float pitch, float fade)
     {
-        if (from is { clip: null } or { isPlaying: false })
+        if (from is { isPlaying: false })
         {
             to.volume = volume;
-            if (!to.isPlaying) to.Play();
+            to.pitch = pitch;
+            if (to is { isPlaying: false }) to.Play();
             return true;
         }
 
@@ -112,7 +159,7 @@ public static class Utility
             from.volume = Mathf.Cos(ratio * Mathf.PI * 0.5f) * volume;
             to.volume = Mathf.Sin(ratio * Mathf.PI * 0.5f) * volume;
 
-            if (!to.isPlaying)
+            if (to is { isPlaying: false })
             {
                 to.Play();
                 to.time = start;
@@ -125,6 +172,9 @@ public static class Utility
             }
         }
         else if (to.isPlaying) to.Stop();
+
+        from.pitch = pitch;
+        to.pitch = pitch;
         return false;
     }
 
@@ -162,5 +212,4 @@ public static class Utility
             else yield break;
         }
     }
-
 }

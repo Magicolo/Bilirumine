@@ -1,4 +1,4 @@
-import asyncio, sys, threading, torch, asyncio, mmap, utility
+import asyncio, sys, threading, torch, asyncio, mmap, utility, base64
 from typing import Optional
 from queue import SimpleQueue
 
@@ -23,14 +23,18 @@ from nodes import (
 def load(state: dict, memory: Optional[mmap.mmap] = None):
     if memory and state["size"] and state["generation"]:
         data = utility.read(memory, state["offset"], state["size"], state["generation"])
-        if data is not None:
-            loaded = torch.frombuffer(data, dtype=torch.uint8)
-            loaded = loaded.to(dtype=torch.float32)
-            loaded = loaded / 255.0
-            loaded = loaded.reshape(1, *state["shape"], 3)
-            return loaded
+    elif state["data"]:
+        data = base64.b64decode(state["data"])
+    else:
+        data = None
 
-    if state["load"]:
+    if data is not None:
+        loaded = torch.frombuffer(data, dtype=torch.uint8)
+        loaded = loaded.to(dtype=torch.float32)
+        loaded = loaded / 255.0
+        loaded = loaded.reshape(1, *state["shape"], 3)
+        return loaded
+    elif state["load"]:
         (loaded, _) = LoadImage().load_image(state["load"])
     elif state["empty"]:
         (loaded,) = EmptyImage().generate(state["width"], state["height"], 1, 0)

@@ -10,6 +10,7 @@ using Debug = UnityEngine.Debug;
 
 public static class Audiocraft
 {
+    [Serializable]
     public sealed record State
     {
         static int _version = 0;
@@ -25,10 +26,11 @@ public static class Audiocraft
         public int Generation;
         public float Duration;
         public float Overlap;
-        public string[]? Prompts;
-        public int[]? Cancel;
-        public int[]? Pause;
-        public int[]? Resume;
+        public string Data = "";
+        public string[] Prompts = Array.Empty<string>();
+        public int[] Cancel = Array.Empty<int>();
+        public int[] Pause = Array.Empty<int>();
+        public int[] Resume = Array.Empty<int>();
 
         public override string ToString() => $@"{{
 ""version"":{Version},
@@ -40,13 +42,15 @@ public static class Audiocraft
 ""generation"":{Generation},
 ""duration"":{Duration},
 ""overlap"":{Overlap},
-""prompts"":[{string.Join(",", Prompts?.Select(prompt => $@"""{prompt.Escape()}""") ?? Array.Empty<string>())}],
-""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],
-""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],
-""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}]
+""data"":""{Data}"",
+""prompts"":[{string.Join(",", Prompts.Select(prompt => $@"""{prompt.Escape()}"""))}],
+""cancel"":[{string.Join(",", Cancel)}],
+""pause"":[{string.Join(",", Pause)}],
+""resume"":[{string.Join(",", Resume)}]
 }}".Replace("\n", "").Replace("\r", "");
     }
 
+    [Serializable]
     public sealed record Clip
     {
         public int Version;
@@ -64,6 +68,7 @@ public static class Audiocraft
         public float Duration => (float)Samples / Rate;
     }
 
+    [Serializable]
     public sealed record Icon
     {
         public int Version;
@@ -84,25 +89,13 @@ public static class Audiocraft
         if (audio == null || audio.samples != samples || audio.channels != channels)
             audio = AudioClip.Create("", samples, channels, rate, false);
 
-        using (var access = memory.CreateViewAccessor())
+        if (memory.Read(offset, (audio, samples, channels), static (state, pointer) => state.audio.SetData(pointer, state.samples * state.channels)))
+            return true;
+        else
         {
-            unsafe
-            {
-                var pointer = (byte*)IntPtr.Zero;
-                try
-                {
-                    access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
-                    if (pointer == null)
-                    {
-                        Error("Failed to acquire pointer to shared memory.");
-                        return false;
-                    }
-                    audio.SetData(new ReadOnlySpan<float>(pointer + offset, samples * channels), 0);
-                }
-                finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
-            }
+            Error("Failed to acquire pointer to shared memory.");
+            return false;
         }
-        return true;
     }
 
     public static bool Load(this MemoryMappedFile memory, Clip clip, ref AudioClip? audio) =>

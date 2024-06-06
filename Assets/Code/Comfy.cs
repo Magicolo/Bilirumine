@@ -12,6 +12,7 @@ using Debug = UnityEngine.Debug;
 
 public static class Comfy
 {
+    [Serializable]
     public sealed record State
     {
         static int _version = 0;
@@ -50,13 +51,14 @@ public static class Comfy
         public float Guidance;
         public float Denoise;
         public bool Full;
-        public int[]? Cancel;
-        public int[]? Pause;
-        public int[]? Resume;
-        public string? Load;
+        public int[] Cancel = Array.Empty<int>();
+        public int[] Pause = Array.Empty<int>();
+        public int[] Resume = Array.Empty<int>();
+        public string Load = "";
+        public string Data = "";
         public bool Empty;
-        public string? Positive;
-        public string? Negative;
+        public string Positive = "";
+        public string Negative = "";
         public State? Next;
 
         public State Map(Func<State, State> map) => map(Next is { } next ? this with { Next = next.Map(map) } : this);
@@ -80,17 +82,19 @@ public static class Comfy
 ""guidance"":{Guidance},
 ""denoise"":{Denoise},
 ""full"":{(Full ? "True" : "False")},
-""cancel"":[{string.Join(",", Cancel ?? Array.Empty<int>())}],
-""pause"":[{string.Join(",", Pause ?? Array.Empty<int>())}],
-""resume"":[{string.Join(",", Resume ?? Array.Empty<int>())}],
+""cancel"":[{string.Join(",", Cancel)}],
+""pause"":[{string.Join(",", Pause)}],
+""resume"":[{string.Join(",", Resume)}],
 ""empty"":{(Empty ? "True" : "False")},
-""positive"":""{Positive?.Escape()}"",
-""negative"":""{Negative?.Escape()}"",
+""positive"":""{Positive.Escape()}"",
+""negative"":""{Negative.Escape()}"",
+""data"":""{Data}"",
 ""load"":""{Load}"",
 ""next"":{Next?.ToString() ?? "None"}
 }}".Replace("\n", "").Replace("\r", "");
     }
 
+    [Serializable]
     public record Frame
     {
         public int Version;
@@ -104,6 +108,7 @@ public static class Comfy
         public int Size;
     }
 
+    [Serializable]
     public record Icon
     {
         public int Version;
@@ -123,26 +128,16 @@ public static class Comfy
         if (texture == null || texture.width != width || texture.height != height)
             texture = new Texture2D(width, height, TextureFormat.RGB24, 1, true, true);
 
-        using (var access = memory.CreateViewAccessor())
+        if (memory.Read(offset, (texture, size), static (state, pointer) => state.texture.LoadRawTextureData(pointer, state.size)))
         {
-            unsafe
-            {
-                var pointer = (byte*)IntPtr.Zero;
-                try
-                {
-                    access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
-                    if (pointer == null)
-                    {
-                        Error("Failed to acquire pointer to shared memory.");
-                        return false;
-                    }
-                    texture.LoadRawTextureData((IntPtr)(pointer + offset), size);
-                }
-                finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
-            }
+            texture.Apply();
+            return true;
         }
-        texture.Apply();
-        return true;
+        else
+        {
+            Error("Failed to acquire pointer to shared memory.");
+            return false;
+        }
     }
 
     public static bool Load(this MemoryMappedFile memory, Image output, Frame frame, ref Texture2D? texture)

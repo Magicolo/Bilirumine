@@ -1,4 +1,4 @@
-import sys, threading, mmap, utility, torch
+import sys, threading, mmap, utility, torch, base64
 from typing import Optional
 from queue import SimpleQueue
 
@@ -9,10 +9,15 @@ from audiocraft.models import MusicGen
 def load(state: dict, memory: Optional[mmap.mmap] = None):
     if memory and state["size"] and state["generation"]:
         data = utility.read(memory, state["offset"], state["size"], state["generation"])
-        if data is not None:
-            loaded = torch.frombuffer(data, dtype=torch.float32)
-            loaded = loaded.reshape(1, 1, len(loaded))
-            return loaded
+    elif state["data"]:
+        data = base64.b64decode(state["data"])
+    else:
+        data = None
+
+    if data is not None:
+        loaded = torch.frombuffer(data, dtype=torch.float32)
+        loaded = loaded.reshape(1, 1, len(loaded))
+        return loaded
 
 
 def read(send: SimpleQueue):
