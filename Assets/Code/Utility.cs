@@ -100,7 +100,7 @@ public static class Utility
         if (from is { clip: null } or { isPlaying: false })
         {
             to.volume = volume;
-            to.Play();
+            if (!to.isPlaying) to.Play();
             return true;
         }
 

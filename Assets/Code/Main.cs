@@ -16,19 +16,12 @@ using UnityEngine.Rendering.PostProcessing;
 
 /*
     TODO
-    - Fix the music.
-    - Cut the music when motion begins; add wind; fade in next music.
+    - Use a purely natural sound for the transition (no distortion).
     - Save the last prompts/positive to be able to resume between sessions and preserve the user path.
-    - Generate an ambiance with 'MagNet'.
-    - Generate music in smaller chunks to favor diversity and dynamism.
-    - Make the prompt LLM generate more diverse visual styles and subjects.
-        - List hundreds of color-inspired subjects/environments/themes/styles with GPT4 and choose 3 randomly to direct the prompt.
     - Add a visual indication that motion is happening.
     - Communicate that the button must be held for a direction to be taken.
     - Add music generated on udio.
     - Save the chosen icons to disk to reproduce a path at the end of the exposition.
-    - Can I generate an audio ambiance with an AI?
-    - Add SFX. How can I generate them with an AI?
     - Display the prompt? Use a TTS model to read out the prompt?
     - Use a llava model as an LLM to generate prompts given the current image?
 
@@ -86,8 +79,8 @@ public sealed class Main : MonoBehaviour
     bool _play = true;
     int _begin;
     int _end;
-    float _duck;
-    float _motion;
+    float _duck = 1f;
+    float _motion = 1f;
     readonly (HashSet<int> image, HashSet<int> sound) _cancel = (new(), new());
 
     IEnumerator Start()
@@ -157,7 +150,7 @@ public sealed class Main : MonoBehaviour
             {
                 if (clips.TryDequeue(out var clip))
                 {
-                    if (_cancel.image.Contains(clip.Version)) continue;
+                    if (_cancel.sound.Contains(clip.Version)) continue;
                     else _clip = clip;
 
                     if (audiocraft.memory.Load(clip, ref load))
@@ -252,6 +245,7 @@ Rate: {delta.speed / delta.wait:00.000}
 Wait: {delta.wait:0.0000}
 Speed: {delta.speed:0.0000}
 Frames: {frames.Count:0000}
+Clips: {clips.Count:0000}
 Resolution: {resolutions.width}x{resolutions.height}";
                 }
                 else
@@ -284,7 +278,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
             {
                 Tags = Tags.Clip,
                 Loop = true,
-                Duration = 5f,
+                Duration = 10f,
                 Overlap = 0.5f
             };
             var loops = (
@@ -299,18 +293,18 @@ Resolution: {resolutions.width}x{resolutions.height}";
             while (true)
             {
                 var inputs = new[] { _inputs.Left.Take(), _inputs.Right.Take(), _inputs.Up.Take(), _inputs.Down.Take() };
-                UpdateIcon(Left, speed, 0, inputs, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
-                UpdateIcon(Right, speed, 1, inputs, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
-                UpdateIcon(Up, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
-                UpdateIcon(Down, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
+                UpdateIcon(Left, arrows.components, speed, 0, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
+                UpdateIcon(Right, arrows.components, speed, 1, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
+                UpdateIcon(Up, arrows.components, speed, 2, inputs, loops.image, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
+                UpdateIcon(Down, arrows.components, speed, 3, inputs, loops.image, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
                 switch (pause, clips.Count(clip => clip.Version == loops.sound))
                 {
-                    case (false, > 2):
+                    case (false, > 5):
                         Audiocraft.Write(audiocraft.process, version => new() { Version = version, Pause = new[] { loops.sound } });
                         pause = true;
                         break;
-                    case (true, < 2):
+                    case (true, < 5):
                         Audiocraft.Write(audiocraft.process, version => new() { Version = version, Resume = new[] { loops.sound } });
                         pause = false;
                         break;
@@ -401,6 +395,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             positive = choice.positive;
                             prompt = choice.prompt;
                             choice = (0, positive, prompt, null);
+                            chosen.Wind.Play();
                             previous = GenerateIcons(loops.image, positive, negative, previous);
                             foreach (var arrow in arrows.components) arrow.Hide();
                         }
@@ -428,54 +423,63 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 yield return null;
             }
 
-            Task<Ollama.Generation[]> GenerateIcons(int end, string positive, string negative, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.components.Select(async arrow =>
+            Task<Ollama.Generation[]> GenerateIcons(int image, string positive, string negative, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.components.Select(async arrow =>
             {
                 var random = new System.Random();
                 var generation = await ollama.client.Generate(arrow.Color, await previous);
-                while (_end < end) await Task.Delay(100);
+                await Task.WhenAll(
+                    Task.Run(async () =>
+                    {
+                        while (_end < image) await Task.Delay(100);
+                        Comfy.Write(comfy.process, version =>
+                        {
+                            var tags = Tags.Icon | arrow.Tags;
+                            var positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {generation.Image}";
+                            arrows.images.map.TryAdd((version, tags), generation.Image);
+                            return new()
+                            {
+                                Version = version,
+                                Tags = tags,
+                                Load = $"{arrow.Color}.png".ToLowerInvariant(),
+                                Positive = positive,
+                                Negative = negative,
+                                Width = 512,
+                                Height = 512,
+                                Steps = 5,
+                                Guidance = 6f,
+                                Denoise = 0.7f,
+                            };
+                        });
+                    }),
+                    Task.Run(async () =>
+                    {
+                        while (clips.Count < 5) await Task.Delay(100);
+                        Audiocraft.Write(audiocraft.process, version =>
+                        {
+                            var tags = Tags.Icon | arrow.Tags;
+                            var prompt = $"{Utility.Styles("punchy", "jingle", "stinger", "notification")} ({arrow.Color}) {generation.Sound}";
+                            arrows.sounds.map.TryAdd((version, tags), generation.Sound);
+                            return new()
+                            {
+                                Version = version,
+                                Tags = tags,
+                                Duration = 10f,
+                                Empty = true,
+                                Prompts = new[] { prompt },
+                            };
+                        });
+                    })
+                );
 
-                Comfy.Write(comfy.process, version =>
-                {
-                    var tags = Tags.Icon | arrow.Tags;
-                    var positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {generation.Image}";
-                    arrows.images.map.TryAdd((version, tags), generation.Image);
-                    return new()
-                    {
-                        Version = version,
-                        Tags = tags,
-                        Load = $"{arrow.Color}.png".ToLowerInvariant(),
-                        Positive = positive,
-                        Negative = negative,
-                        Width = 512,
-                        Height = 512,
-                        Steps = 5,
-                        Guidance = 6f,
-                        Denoise = 0.7f,
-                    };
-                });
-                Audiocraft.Write(audiocraft.process, version =>
-                {
-                    var tags = Tags.Icon | arrow.Tags;
-                    var prompt = $"{Utility.Styles("punchy", "jingle", "stinger", "notification")} ({arrow.Color}) {generation.Sound}";
-                    arrows.sounds.map.TryAdd((version, tags), generation.Sound);
-                    return new()
-                    {
-                        Version = version,
-                        Tags = tags,
-                        Duration = 10f,
-                        Empty = true,
-                        Prompts = new[] { prompt },
-                    };
-                });
                 return generation;
             }));
 
-            void UpdateIcon(Arrow arrow, float speed, int index, bool[] inputs, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
+            void UpdateIcon(Arrow arrow, Arrow[] arrows, float speed, int index, bool[] inputs, int image, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
             {
-                var hidden = arrows.components.Any(arrow => arrow.Hidden);
+                var hidden = arrows.Any(arrow => arrow.Hidden);
                 var move = !hidden && inputs[index] &&
                     inputs.Enumerate().All(pair => pair.index == index || !pair.item) &&
-                    arrows.components.All(other => arrow == other || other.Idle);
+                    arrows.All(other => arrow == other || other.Idle);
                 {
                     var source = arrow.Rectangle.anchoredPosition;
                     var target = hidden ? hide(source) : move ? choose(source) : peek(source);
@@ -503,9 +507,9 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 {
                     arrow.Sound.volume = Mathf.Lerp(arrow.Sound.volume, move ? 1f : 0f, Time.deltaTime * speed);
                     arrow.Sound.pitch = Mathf.Lerp(arrow.Sound.pitch, move ? 1f : 0.1f, Time.deltaTime * speed * speed);
-                    arrow.Filter.cutoffFrequency = Mathf.Lerp(arrow.Filter.cutoffFrequency, move ? 5000f : 0f, Time.deltaTime);
                 }
                 arrow.Time = hidden ? 0f : move ? arrow.Time + Time.deltaTime : 0f;
+                if (_end >= image) arrow.Wind.Stop();
             }
         }
 

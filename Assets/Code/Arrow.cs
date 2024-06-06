@@ -49,7 +49,7 @@ public sealed class Arrow : MonoBehaviour
     public Image Image = default!;
     public Mask Content = default!;
     public AudioSource Sound = default!;
-    public AudioLowPassFilter Filter = default!;
+    public ParticleSystem Wind = default!;
 
     public (Comfy.Icon? image, Audiocraft.Icon? sound) Icons;
     public float Time { get; set; }
@@ -69,6 +69,7 @@ public sealed class Arrow : MonoBehaviour
     {
         transform.localScale = transform.localScale.With(Sine2(2.5f, 0.01f, 1f, _offsets.root));
         Content.transform.localScale = Content.transform.localScale.With(Sine2(1.5f, 0.06f, 0.8f, _offsets.socket));
+        Wind.transform.position = ((Vector2)Direction).normalized * 1000f;
     }
 
     public void Hide() { Icons = default; Time = 0f; }
