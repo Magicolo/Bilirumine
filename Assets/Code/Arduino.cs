@@ -1,16 +1,16 @@
 #nullable enable
 
 using System;
-using System.IO.Ports;
+using MonoSerialPort;
 using Debug = UnityEngine.Debug;
 
 public static class Arduino
 {
-    public static SerialPort? Create()
+    public static SerialPortInput? Create()
     {
         try
         {
-            var ports = SerialPort.GetPortNames();
+            var ports = SerialPortInput.GetPorts();
             Log($"Ports: {string.Join(", ", ports)}");
             return ports.TryFirst(out var port) ? Utility.Serial(port, 9600) : null;
         }

@@ -4,14 +4,15 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Ports;
 using System.IO.MemoryMappedFiles;
 using System.Net.Http;
 using System.Threading.Tasks;
+using MonoSerialPort;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 using System.Linq;
 using System;
+using MonoSerialPort.Port;
 
 public static class Utility
 {
@@ -28,12 +29,16 @@ public static class Utility
         return memory;
     }
 
-    public static SerialPort Serial(string name, int rate)
+    public static SerialPortInput? Serial(string name, int rate)
     {
-        var port = new SerialPort(name, rate);
-        Application.quitting += () => { try { port.Close(); } catch { } };
-        port.Open();
-        return port;
+        try
+        {
+            var port = new SerialPortInput(name, rate, Parity.None, 8, StopBits.One, Handshake.None, false, true);
+            Application.quitting += () => { try { port.Disconnect(); } catch { } };
+            if (port.Connect()) return port;
+        }
+        catch { }
+        return null;
     }
 
     public static string Cache()

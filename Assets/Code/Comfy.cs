@@ -178,7 +178,7 @@ public static class Comfy
         return version;
     }
 
-    public static void Log(string message) => Debug.Log($"COMFY: {message}");
-    public static void Warn(string message) => Debug.LogWarning($"COMFY: {message}");
-    public static void Error(string message) => Debug.LogError($"COMFY: {message}");
+    public static void Log(string message) => Debug.Log($"COMFY: {message.Truncate(2500)}");
+    public static void Warn(string message) => Debug.LogWarning($"COMFY: {message.Truncate(2500)}");
+    public static void Error(string message) => Debug.LogError($"COMFY: {message.Truncate(2500)}");
 }

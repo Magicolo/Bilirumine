@@ -41,10 +41,7 @@ public struct Inputs
     public bool Tab;
     public bool Shift;
     public bool Space;
-    public bool _1;
-    public bool _2;
-    public bool _3;
-    public bool _4;
+    public bool[] Buttons;
 }
 
 sealed record Entry
@@ -90,7 +87,7 @@ public sealed class Main : MonoBehaviour
 
     float Volume => Mathf.Clamp01(_volume * _motion);
 
-    Inputs _inputs = default;
+    Inputs _inputs = new() { Buttons = new bool[4] };
     Comfy.Frame _frame = new();
     Audiocraft.Clip _clip = new();
     bool _play = true;
@@ -120,15 +117,15 @@ public sealed class Main : MonoBehaviour
             components: new[] { Left, Right, Up, Down },
             images: (queue: new ConcurrentQueue<Comfy.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()),
             sounds: (queue: new ConcurrentQueue<Audiocraft.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()));
+        var serial = false;
         StartCoroutine(UpdateFrames());
         StartCoroutine(UpdateClips());
         StartCoroutine(UpdateArrows());
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateDebug());
-        StartCoroutine(UpdateSerial());
 
-        foreach (var item in Utility.Wait(ComfyOutput(), AudiocraftOutput()))
+        foreach (var item in Utility.Wait(ComfyOutput(), AudiocraftOutput(), ArduinoOutput()))
         {
             Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
             Cursor.visible = Application.isEditor;
@@ -222,34 +219,6 @@ public sealed class Main : MonoBehaviour
             }
         }
 
-        IEnumerator UpdateSerial()
-        {
-            var buffer = new byte[5];
-            var inputs = new bool[4];
-            while (arduino is { })
-            {
-                if (arduino.BytesToRead >= buffer.Length)
-                {
-                    arduino.Read(buffer, 0, buffer.Length);
-                    if (buffer[4] < byte.MaxValue)
-                    {
-                        while (arduino.ReadByte() < byte.MaxValue)
-                        {
-                            Arduino.Log("Adjusting serial buffer.");
-                            yield return null;
-                        }
-                    }
-                    else if (inputs[0].Change(buffer[0] > 0)) _inputs._1 = inputs[0];
-                    else if (inputs[1].Change(buffer[1] > 0)) _inputs._2 = inputs[1];
-                    else if (inputs[2].Change(buffer[2] > 0)) _inputs._3 = inputs[2];
-                    else if (inputs[3].Change(buffer[3] > 0)) _inputs._4 = inputs[3];
-
-                    if (inputs.Any(input => input)) Arduino.Log(string.Join(", ", inputs));
-                }
-                yield return null;
-            }
-        }
-
         IEnumerator UpdateDebug()
         {
             var show = Application.isEditor;
@@ -319,9 +288,9 @@ Resolution: {resolutions.width}x{resolutions.height}";
             var choice = (version: 0, positive, prompt, chosen: default(Arrow));
             while (true)
             {
-                var inputs = new[] { _inputs.Left.Take(), _inputs.Right.Take(), _inputs.Up.Take(), _inputs.Down.Take() };
-                UpdateIcon(Left, arrows.components, speed, 0, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
-                UpdateIcon(Right, arrows.components, speed, 1, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
+                var inputs = serial ? _inputs.Buttons : new[] { _inputs.Right, _inputs.Left, _inputs.Up, _inputs.Down };
+                UpdateIcon(Left, arrows.components, speed, 1, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
+                UpdateIcon(Right, arrows.components, speed, 0, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
                 UpdateIcon(Up, arrows.components, speed, 2, inputs, loops.image, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
                 UpdateIcon(Down, arrows.components, speed, 3, inputs, loops.image, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
@@ -674,6 +643,21 @@ Resolution: {resolutions.width}x{resolutions.height}";
             }
         }
 
+        async Task ArduinoOutput()
+        {
+            var index = 0;
+            var buffer = new byte[32];
+            while (arduino is { IsConnected: true, Stream: var stream })
+            {
+                var count = await stream.ReadAsync(buffer);
+                for (int i = 0; i < count; i++)
+                {
+                    if (buffer[i] == byte.MaxValue) { index = 0; serial = true; }
+                    else if (index < _inputs.Buttons.Length) _inputs.Buttons[index++] = buffer[i] > 0;
+                }
+            }
+        }
+
         async Task Save(Comfy.Icon image, Audiocraft.Icon sound, Colors color, string positive, string prompt) =>
             await File.AppendAllLinesAsync(_history, new[] { JsonUtility.ToJson(new Entry
             {
@@ -706,9 +690,5 @@ Resolution: {resolutions.width}x{resolutions.height}";
         _inputs.Tab = Input.GetKeyDown(KeyCode.Tab);
         _inputs.Shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
         _inputs.Space = Input.GetKeyDown(KeyCode.Space);
-        _inputs._1 = Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1);
-        _inputs._2 = Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2);
-        _inputs._3 = Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3);
-        _inputs._4 = Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4);
     }
 }

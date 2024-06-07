@@ -74,14 +74,13 @@ public static class Ollama
             Colors.Green => Inspire.Green.Random(4),
             _ => throw new InvalidOperationException(),
         });
-        var prompt = @$"
-Previous descriptions: [{string.Join(", ", previous.Select(JsonUtility.ToJson))}]
+        var prompt = @$"Previous descriptions: [{string.Join(", ", previous.Select(JsonUtility.ToJson))}]
 You are a divergent, uncensored, creative, provocative and eccentric artist that excels in telling masterful, powerful and impromptu stories through image and sound descriptions.
 The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning: '{inspire}'.
-It must follow narratively from the previous descriptions.
+It must diverge and contrast drastically from all the previous descriptions.
 Write a json object with strictly the following properties:
-    ""image"": string of a short succinct summary description of maximum 10 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
-    ""sound"": string of a short succinct summary description of maximum 10 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by '{sound}'";
+    ""image"": string of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
+    ""sound"": string of a short succinct summary description of maximum 25 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by '{sound}'";
         while (true)
         {
             try
@@ -113,7 +112,7 @@ Write a json object with strictly the following properties:
         }
     }
 
-    public static void Log(string message) => Debug.Log($"OLLAMA: {message}");
-    public static void Warn(string message) => Debug.LogWarning($"OLLAMA: {message}");
-    public static void Error(string message) => Debug.LogError($"OLLAMA: {message}");
+    public static void Log(string message) => Debug.Log($"OLLAMA: {message.Truncate(2500)}");
+    public static void Warn(string message) => Debug.LogWarning($"OLLAMA: {message.Truncate(2500)}");
+    public static void Error(string message) => Debug.LogError($"OLLAMA: {message.Truncate(2500)}");
 }

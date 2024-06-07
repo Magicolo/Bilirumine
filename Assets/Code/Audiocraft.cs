@@ -125,7 +125,7 @@ public static class Audiocraft
         return version;
     }
 
-    public static void Log(string message) => Debug.Log($"AUDIOCRAFT: {message}");
-    public static void Warn(string message) => Debug.LogWarning($"AUDIOCRAFT: {message}");
-    public static void Error(string message) => Debug.LogError($"AUDIOCRAFT: {message}");
+    public static void Log(string message) => Debug.Log($"AUDIOCRAFT: {message.Truncate(2500)}");
+    public static void Warn(string message) => Debug.LogWarning($"AUDIOCRAFT: {message.Truncate(2500)}");
+    public static void Error(string message) => Debug.LogError($"AUDIOCRAFT: {message.Truncate(2500)}");
 }
