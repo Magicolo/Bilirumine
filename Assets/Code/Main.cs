@@ -252,14 +252,14 @@ Resolution: {resolutions.width}x{resolutions.height}";
             var styles = Utility.Styles("ultra detailed", "hyper realistic", "complex", "dense", "sharp");
             var positive = entry?.Positive ?? string.Join(", ", Inspire.Image.Random(25));
             var prompt = entry?.Prompt ?? string.Join(", ", Inspire.Sound.Random(10));
-            var negative = string.Join(", ", "low detail", "plain", "simple", "sparse", "blurry", "worst quality");
+            var negative = string.Join(", ", "low detail", "plain", "simple", "sparse", "blurry", "worst quality", "nude", "nudity", "naked", "genital", "child", "children", "teenager");
             var frame = new Comfy.State()
             {
                 Tags = Tags.Frame,
                 Width = _resolutions.high.width,
                 Height = _resolutions.high.height,
                 Loop = true,
-                Zoom = 64,
+                Zoom = 96,
                 Steps = 5,
                 Guidance = 5.5f,
                 Denoise = 0.6f,
@@ -496,7 +496,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 }
                 {
                     var source = arrow.Shake.localScale;
-                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time / 3.75f, 2f), 1.25f) : Vector3.one;
+                    var target = inputs[index] ? Vector3.one + Vector3.one * Mathf.Min(Mathf.Pow(arrow.Time, 0.5f), 1.5f) : Vector3.one;
                     var scale = Vector3.Lerp(source, target, Time.deltaTime * speed);
                     arrow.Shake.localScale = scale;
                 }
