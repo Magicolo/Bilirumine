@@ -51,7 +51,7 @@ public static class Audiocraft
     }
 
     [Serializable]
-    public sealed record Clip
+    public sealed record Clip : IDisposable
     {
         public int Version;
         public Tags Tags;
@@ -64,12 +64,15 @@ public static class Audiocraft
         public int Offset;
         public int Size;
         public int Generation;
+        public byte[] Data = Array.Empty<byte>();
 
         public float Duration => (float)Samples / Rate;
+
+        public void Dispose() => Pool<byte>.Put(ref Data);
     }
 
     [Serializable]
-    public sealed record Icon
+    public sealed record Icon : IDisposable
     {
         public int Version;
         public Tags Tags;
@@ -80,35 +83,37 @@ public static class Audiocraft
         public int Size;
         public int Generation;
         public string Description = "";
+        public byte[] Data = Array.Empty<byte>();
+
+        public void Dispose() => Pool<byte>.Put(ref Data);
     }
 
     public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("audiocraft"), Utility.Memory("sound"));
 
-    public static bool Load(this MemoryMappedFile memory, int rate, int samples, int channels, int offset, ref AudioClip? audio)
+    public static bool Load(int rate, int samples, int channels, byte[] data, ref AudioClip? audio)
     {
         if (audio == null || audio.samples != samples || audio.channels != channels)
             audio = AudioClip.Create("", samples, channels, rate, false);
 
-        if (memory.Read(offset, (audio, samples, channels), static (state, pointer) => state.audio.SetData(pointer, state.samples * state.channels)))
-            return true;
-        else
+        unsafe
         {
-            Error("Failed to acquire pointer to shared memory.");
-            return false;
+            fixed (byte* pointer = data)
+            {
+                return audio.SetData(new ReadOnlySpan<float>(pointer, data.Length / sizeof(float)), 0);
+            }
         }
     }
 
-    public static bool Load(this MemoryMappedFile memory, Clip clip, ref AudioClip? audio) =>
-        Load(memory, clip.Rate, clip.Samples, clip.Channels, clip.Offset, ref audio);
+    public static bool Load(Clip clip, ref AudioClip? audio) =>
+        Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
 
-    public static bool Load(this MemoryMappedFile memory, Arrow arrow, Icon icon)
+    public static bool TryLoad(Icon icon, Arrow arrow)
     {
         var audio = arrow.Audio;
-        if (icon.Tags.HasFlag(arrow.Tags) && memory.Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, ref audio))
+        if (icon.Tags.HasFlag(arrow.Tags) && Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio))
         {
             arrow.Audio = audio;
             arrow.Sound.clip = arrow.Audio;
-            arrow.Sound.Play();
             arrow.Icons.sound = icon;
             return true;
         }

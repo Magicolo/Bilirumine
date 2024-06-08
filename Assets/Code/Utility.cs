@@ -17,7 +17,7 @@ using MonoSerialPort.Port;
 public static class Utility
 {
     public static string Escape(this string value) => value.Replace(@"""", @"\""");
-    public static string Sanitize(this string value) => value.Replace('\n', ' ').Replace('\r', ' ').Replace('(', '<').Replace(')', '>');
+    public static string Sanitize(this string value) => value.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ').Replace('"', '\'').Replace('{', '<').Replace('}', '>').Replace('[', '<').Replace(']', '>').Replace('(', '<').Replace(')', '>');
 
     public static MemoryMappedFile Memory(string name)
     {
@@ -75,50 +75,12 @@ public static class Utility
         return process;
     }
 
-    public static bool Read<T>(this MemoryMappedFile memory, int offset, T state, Action<T, IntPtr> read) =>
-        memory.Read(offset, (state, read), static (state, pointer) => { state.read(state.state, pointer); return true; });
-
-    public static U? Read<T, U>(this MemoryMappedFile memory, int offset, T state, Func<T, IntPtr, U> read)
+    public static byte[] Read(this MemoryMappedFile memory, int offset, int size)
     {
-        using (var access = memory.CreateViewAccessor())
-        {
-            unsafe
-            {
-                var pointer = (byte*)IntPtr.Zero;
-                try
-                {
-                    access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
-                    if (pointer == null) return default;
-                    return read(state, (IntPtr)(pointer + offset));
-                }
-                finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
-            }
-        }
-    }
-
-    public static byte[]? Read(this MemoryMappedFile memory, int offset, int size) =>
-        memory.Read(offset, size, static (size, pointer) =>
-        {
-            unsafe
-            {
-                var span = new ReadOnlySpan<byte>((void*)pointer, size);
-                return span.ToArray();
-            }
-        });
-
-    public static bool Read(this MemoryMappedFile memory, int offset, int size, Stream stream) =>
-        memory.Read(offset, (stream, size), static (state, pointer) =>
-        {
-            unsafe
-            {
-                var span = new ReadOnlySpan<byte>((void*)pointer, state.size);
-                state.stream.Write(span);
-            }
-        });
-
-    public static bool SetData(this AudioClip audio, IntPtr data, int size)
-    {
-        unsafe { return audio.SetData(new ReadOnlySpan<float>((void*)data, size), 0); }
+        using var access = memory.CreateViewAccessor();
+        var bytes = Pool<byte>.Take(size);
+        access.ReadArray(offset, bytes, 0, size);
+        return bytes;
     }
 
     public static Process Docker(string service)

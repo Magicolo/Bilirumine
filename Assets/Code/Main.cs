@@ -17,18 +17,10 @@ using System.IO;
 
 /*
     TODO
-    - Use a purely natural sound for the transition (no distortion).
-    - Save the last prompts/positive to be able to resume between sessions and preserve the user path.
-    - Add a visual indication that motion is happening.
-    - Communicate that the button must be held for a direction to be taken.
-    - Add music generated on udio.
-    - Save the chosen icons to disk to reproduce a path at the end of the exposition.
-    - Display the prompt? Use a TTS model to read out the prompt?
+    - If docker containers stop generating, restart them?
+    - Saving the icon's data can fail if its been overwritten.
+        - Extract data from the 'Texture' and 'AudioClip'?
     - Use a llava model as an LLM to generate prompts given the current image?
-
-    BUGS:
-    - After navigating with icons a few times, sometimes the chosen icon never resolves (remains stuck in full shake).
-    - Sometimes, icons remain black (with some noise).
 */
 public struct Inputs
 {
@@ -141,16 +133,15 @@ public sealed class Main : MonoBehaviour
             {
                 if (_play && frames.TryDequeue(out var frame))
                 {
+                    using var _ = frame;
                     if (_cancel.image.Contains(frame.Version)) continue;
                     else _frame = frame;
 
                     while (Time.time - time < delta.wait / delta.speed) yield return null;
                     time += delta.wait / delta.speed;
-                    if (comfy.memory.Load(Output, frame, ref load))
-                    {
-                        (main, load) = (load, main);
-                        resolutions = (frame.Width, frame.Height);
-                    }
+                    Comfy.Load(frame, Output, ref load);
+                    (main, load) = (load, main);
+                    resolutions = (frame.Width, frame.Height);
                 }
                 else time = Time.time;
                 yield return null;
@@ -165,10 +156,11 @@ public sealed class Main : MonoBehaviour
             {
                 if (clips.TryDequeue(out var clip))
                 {
+                    using var _ = clip;
                     if (_cancel.sound.Contains(clip.Version)) continue;
                     else _clip = clip;
 
-                    if (audiocraft.memory.Load(clip, ref load))
+                    if (Audiocraft.Load(clip, ref load))
                     {
                         In.clip = load;
                         In.volume = 0f;
@@ -195,11 +187,17 @@ public sealed class Main : MonoBehaviour
             while (true)
             {
                 if (arrows.images.queue.TryDequeue(out var icon))
+                {
+                    using var _ = icon;
                     foreach (var arrow in arrows.components)
-                        comfy.memory.Load(arrow, icon);
+                        Comfy.TryLoad(icon, arrow);
+                }
                 if (arrows.sounds.queue.TryDequeue(out var sound))
+                {
+                    using var _ = sound;
                     foreach (var arrow in arrows.components)
-                        audiocraft.memory.Load(arrow, sound);
+                        Audiocraft.TryLoad(sound, arrow);
+                }
                 yield return null;
             }
         }
@@ -259,10 +257,10 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 Width = _resolutions.high.width,
                 Height = _resolutions.high.height,
                 Loop = true,
-                Zoom = 96,
+                Zoom = 64,
                 Steps = 5,
-                Guidance = 5.5f,
-                Denoise = 0.6f,
+                Guidance = 6f,
+                Denoise = 0.7f,
                 Negative = negative,
                 Full = true,
             };
@@ -545,7 +543,12 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         Comfy.Log($"Received frame: {frame}");
                         for (int i = 0; i < count; i++, offset += size)
                         {
-                            frames.Enqueue(frame with { Index = i, Offset = offset });
+                            frames.Enqueue(frame with
+                            {
+                                Index = i,
+                                Offset = offset,
+                                Data = comfy.memory.Read(offset, size),
+                            });
 
                             var now = watch.Elapsed;
                             if (deltas.images.TryDequeue(out _)) deltas.images.Enqueue(now - then.image);
@@ -569,6 +572,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Size = size,
                             Tags = tags,
                             Description = description,
+                            Data = comfy.memory.Read(offset, size),
                         };
                         Comfy.Log($"Received icon: {icon}");
                         arrows.images.queue.Enqueue(icon);
@@ -611,13 +615,17 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Samples = samples,
                             Channels = channels,
                             Count = count,
-                            Offset = offset,
                             Size = size,
                             Generation = generation,
                         };
                         Audiocraft.Log($"Received clip: {clip}");
                         for (int i = 0; i < count; i++, offset += size)
-                            clips.Enqueue(clip with { Index = i, Offset = offset });
+                            clips.Enqueue(clip with
+                            {
+                                Index = i,
+                                Offset = offset,
+                                Data = audiocraft.memory.Read(offset, size),
+                            });
                     }
                     if (arrows.sounds.map.TryRemove((version, tags), out var description))
                     {
@@ -632,6 +640,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Size = size,
                             Generation = generation,
                             Description = description,
+                            Data = audiocraft.memory.Read(offset, size),
                         };
                         Audiocraft.Log($"Received icon: {icon}");
                         arrows.sounds.queue.Enqueue(icon);
@@ -662,8 +671,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
             await File.AppendAllLinesAsync(_history, new[] { JsonUtility.ToJson(new Entry
             {
                 Date = DateTime.UtcNow.Ticks,
-                Image = Convert.ToBase64String(comfy.memory.Read(image.Offset, image.Size)),
-                Sound = Convert.ToBase64String(audiocraft.memory.Read(sound.Offset, sound.Size)),
+                Image = Convert.ToBase64String(image.Data),
+                Sound = Convert.ToBase64String(sound.Data),
                 Color = color,
                 Width = image.Width,
                 Height = image.Height,
