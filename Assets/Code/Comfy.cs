@@ -129,6 +129,48 @@ public static class Comfy
 
     public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("comfy"), Utility.Memory("image"));
 
+    public unsafe static void Load(int width, int height, int offset, MemoryMappedFile memory, ref Texture2D? texture)
+    {
+        if (texture == null || texture.width != width || texture.height != height)
+            texture = new Texture2D(width, height, TextureFormat.RGB24, 1, true, true);
+
+        using var access = memory.CreateViewAccessor();
+        try
+        {
+            var pointer = (byte*)IntPtr.Zero;
+            access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
+            if (pointer == null) throw new NullReferenceException();
+            texture.LoadRawTextureData((IntPtr)(pointer + offset), width * height * 3);
+        }
+        finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
+        texture.Apply();
+    }
+
+    public static void Load(int width, int height, int offset, MemoryMappedFile memory, Image image, ref Texture2D? texture)
+    {
+        Load(width, height, offset, memory, ref texture);
+        var area = new Rect(0f, 0f, width, height);
+        var sprite = Sprite.Create(texture, area, area.center);
+        image.sprite = sprite;
+    }
+
+    public static void Load(Frame frame, MemoryMappedFile memory, Image image, ref Texture2D? texture) =>
+        Load(frame.Width, frame.Height, frame.Offset, memory, image, ref texture);
+
+    public static bool TryLoad(Icon icon, MemoryMappedFile memory, Arrow arrow)
+    {
+        if (icon.Tags.HasFlag(arrow.Tags))
+        {
+            var texture = arrow.Texture;
+            Load(icon.Width, icon.Height, icon.Offset, memory, arrow.Image, ref texture);
+            arrow.Texture = texture;
+            Utility.Set(ref arrow.Icons.image, icon);
+            return true;
+        }
+        else
+            return false;
+    }
+
     public static void Load(int width, int height, byte[] data, ref Texture2D? texture)
     {
         if (texture == null || texture.width != width || texture.height != height)
@@ -156,7 +198,7 @@ public static class Comfy
             var texture = arrow.Texture;
             Load(icon.Width, icon.Height, icon.Data, arrow.Image, ref texture);
             arrow.Texture = texture;
-            arrow.Icons.image = icon;
+            Utility.Set(ref arrow.Icons.image, icon);
             return true;
         }
         else

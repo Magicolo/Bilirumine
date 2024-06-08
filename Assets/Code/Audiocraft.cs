@@ -90,6 +90,40 @@ public static class Audiocraft
 
     public static (Process process, MemoryMappedFile memory) Create() => (Utility.Docker("audiocraft"), Utility.Memory("sound"));
 
+    public unsafe static void Load(int rate, int samples, int channels, int offset, MemoryMappedFile memory, ref AudioClip? audio)
+    {
+        if (audio == null || audio.samples != samples || audio.channels != channels)
+            audio = AudioClip.Create("", samples, channels, rate, false);
+
+        using var access = memory.CreateViewAccessor();
+        try
+        {
+            var pointer = (byte*)IntPtr.Zero;
+            access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
+            if (pointer == null) throw new NullReferenceException();
+            audio.SetData(new ReadOnlySpan<float>(pointer + offset, samples * channels), 0);
+        }
+        finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
+    }
+
+    public static void Load(Clip clip, MemoryMappedFile memory, ref AudioClip? audio) =>
+        Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, memory, ref audio);
+
+    public static bool TryLoad(Icon icon, MemoryMappedFile memory, Arrow arrow)
+    {
+        if (icon.Tags.HasFlag(arrow.Tags))
+        {
+            var audio = arrow.Audio;
+            Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, memory, ref audio);
+            arrow.Audio = audio;
+            arrow.Sound.clip = arrow.Audio;
+            Utility.Set(ref arrow.Icons.sound, icon);
+            return true;
+        }
+        else
+            return false;
+    }
+
     public static bool Load(int rate, int samples, int channels, byte[] data, ref AudioClip? audio)
     {
         if (audio == null || audio.samples != samples || audio.channels != channels)
@@ -114,7 +148,7 @@ public static class Audiocraft
         {
             arrow.Audio = audio;
             arrow.Sound.clip = arrow.Audio;
-            arrow.Icons.sound = icon;
+            Utility.Set(ref arrow.Icons.sound, icon);
             return true;
         }
         else return false;

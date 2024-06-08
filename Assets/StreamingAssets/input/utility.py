@@ -1,4 +1,4 @@
-import sys, os, threading, ast, random, mmap
+import sys, threading, ast, random, mmap
 from queue import SimpleQueue, Empty
 from typing import Optional, Tuple
 
@@ -82,20 +82,29 @@ def read(memory: mmap.mmap, offset: int, size: int, generation: int) -> Optional
     return memory.read(size)
 
 
+def align(pointer: int) -> int:
+    global ALIGN
+    remain = pointer % ALIGN
+    if remain == 0:
+        return pointer
+    else:
+        return pointer + ALIGN - remain
+
+
 def write(memory: mmap.mmap, bytes: bytes) -> Tuple[int, int, int]:
-    global INDEX, CAPACITY, GENERATION, MEMORY_LOCK
+    global INDEX, CAPACITY, GENERATION, ALIGN, MEMORY_LOCK
 
     size = len(bytes)
     if size <= 0:
         return (0, 0, 0)
 
     with MEMORY_LOCK:
-        if INDEX + size > CAPACITY:
+        if INDEX + size + ALIGN > CAPACITY:
             offset, INDEX = 0, 0
             GENERATION += 1
         else:
             offset = INDEX
-        INDEX += size
+        INDEX = align(INDEX + size)
         generation = GENERATION
 
     memory.seek(offset)
@@ -113,6 +122,7 @@ def update(cancel, pause, resume):
 
 
 WAIT = 0.1
+ALIGN = 8
 PAUSE = set()
 CANCEL = set()
 GENERATION = 1

@@ -41,6 +41,13 @@ public static class Utility
         return null;
     }
 
+    public static void Set<T>(ref T? source, T target) where T : IDisposable
+    {
+        var value = source;
+        source = target;
+        value?.Dispose();
+    }
+
     public static string Cache()
     {
         var path = Path.Join(Application.streamingAssetsPath, "input", ".cache");
@@ -75,11 +82,12 @@ public static class Utility
         return process;
     }
 
-    public static byte[] Read(this MemoryMappedFile memory, int offset, int size)
+    public static async Task<byte[]> Read(this MemoryMappedFile memory, int offset, int size)
     {
-        using var access = memory.CreateViewAccessor();
+        using var stream = memory.CreateViewStream();
+        stream.Seek(offset, SeekOrigin.Begin);
         var bytes = Pool<byte>.Take(size);
-        access.ReadArray(offset, bytes, 0, size);
+        await stream.ReadAsync(bytes);
         return bytes;
     }
 
@@ -107,6 +115,12 @@ public static class Utility
         Colors.Yellow => UnityEngine.Color.yellow,
         _ => throw new InvalidOperationException(),
     };
+
+    public static void Or(bool[] left, bool[] right, bool[] result)
+    {
+        for (int i = 0; i < result.Length; i++)
+            result[i] = left[i] || right[i];
+    }
 
     public static bool Chain(AudioSource from, AudioSource to, float volume, float pitch, float fade)
     {
