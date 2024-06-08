@@ -94,7 +94,7 @@ public static class Utility
     public static Process Docker(string service)
     {
         var path = Path.Join(Application.streamingAssetsPath, "docker-compose.yml");
-        var process = Run(service.ToUpper(), "docker", $"compose --file '{path}' run --service-ports --interactive --rm {service}");
+        var process = Run(service.ToUpper(), "docker", $"compose --file '{path}' run --service-ports --interactive {service}");
         Application.quitting += () => { try { process.Dispose(); } catch { } };
         Application.quitting += () => { try { Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill {service}")); } catch { } };
         return process;

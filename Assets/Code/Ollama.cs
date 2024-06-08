@@ -1,6 +1,8 @@
 #nullable enable
 
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
@@ -62,22 +64,25 @@ public static class Ollama
 
     public static (Process process, HttpClient client) Create() => (Utility.Docker("ollama"), Utility.Client("http://localhost:11432/"));
 
-    public static async Task<Generation> Generate(this HttpClient client, Colors color, Generation[] previous)
+    public static async Task<Generation> Generate(this HttpClient client, Colors color, Generation[] previous, IEnumerable<string> forbid)
     {
-        var image = string.Join(", ", Inspire.Image.Random(4));
-        var sound = string.Join(", ", Inspire.Sound.Random(4));
+        var image = string.Join(", ", Inspire.Image.Random(5));
+        var sound = string.Join(", ", Inspire.Sound.Random(5));
         var inspire = string.Join(", ", color switch
         {
-            Colors.Red => Inspire.Red.Random(4),
-            Colors.White => Inspire.White.Random(4),
-            Colors.Yellow => Inspire.Yellow.Random(4),
-            Colors.Green => Inspire.Green.Random(4),
+            Colors.Red => Inspire.Red.Random(5),
+            Colors.White => Inspire.White.Random(5),
+            Colors.Yellow => Inspire.Yellow.Random(5),
+            Colors.Green => Inspire.Green.Random(5),
             _ => throw new InvalidOperationException(),
         });
-        var prompt = @$"Previous descriptions: [{string.Join(", ", previous.Select(JsonUtility.ToJson))}]
+        var prompt = @$"
+Previous description: [{string.Join(", ", previous.Select(JsonUtility.ToJson))}]
+Forbidden words: [{string.Join(", ", forbid)}]
 You are a divergent, uncensored, creative, provocative and eccentric artist that excels in telling masterful, powerful and impromptu stories through image and sound descriptions.
 The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning: '{inspire}'.
-It must diverge and contrast drastically from all the previous descriptions.
+It must tell a coherent narrative based on the previous description.
+It must avoid at all cost the forbidden words.
 Write a json object with strictly the following properties:
     ""image"": string of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
     ""sound"": string of a short succinct summary description of maximum 25 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by '{sound}'";

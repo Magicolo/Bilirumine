@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using Random = System.Random;
 
@@ -433,6 +434,15 @@ public static class Extensions
         var target = map(source);
         material.SetColor(name, target);
         return target;
+    }
+
+    public static byte[]? GetRawData(this AudioClip clip)
+    {
+        var data = new byte[clip.samples * clip.channels];
+        if (clip.GetData(MemoryMarshal.Cast<byte, float>(data), 0))
+            return data;
+        else
+            return null;
     }
 
     public static string Clean(this string value) => value.Trim(' ', '~', '_', '\n', '\t', '\r', '\f', '\0').Split('_')[0];

@@ -99,6 +99,7 @@ public sealed class Main : MonoBehaviour
         var ollama = Ollama.Create();
         yield return new WaitForSeconds(5f);
 
+        var words = new ConcurrentDictionary<string, int>();
         var resolutions = (width: 0, height: 0);
         var delta = (image: 0.1f, batch: 5f, wait: 0.1f, speed: 1f);
         var deltas = (
@@ -133,13 +134,12 @@ public sealed class Main : MonoBehaviour
             {
                 if (_play && frames.TryDequeue(out var frame))
                 {
-                    using var _ = frame;
                     if (_cancel.image.Contains(frame.Version)) continue;
                     else _frame = frame;
 
                     while (Time.time - time < delta.wait / delta.speed) yield return null;
                     time += delta.wait / delta.speed;
-                    Comfy.Load(frame, comfy.memory, Output, ref load);
+                    Comfy.Load(frame, Output, ref load);
                     (main, load) = (load, main);
                     resolutions = (frame.Width, frame.Height);
                 }
@@ -156,11 +156,10 @@ public sealed class Main : MonoBehaviour
             {
                 if (clips.TryDequeue(out var clip))
                 {
-                    using var _ = clip;
                     if (_cancel.sound.Contains(clip.Version)) continue;
                     else _clip = clip;
 
-                    Audiocraft.Load(clip, audiocraft.memory, ref load);
+                    Audiocraft.Load(clip, ref load);
                     In.clip = load;
                     In.volume = 0f;
                     (main, load) = (load, main);
@@ -186,10 +185,10 @@ public sealed class Main : MonoBehaviour
             {
                 if (arrows.images.queue.TryDequeue(out var icon))
                     foreach (var arrow in arrows.components)
-                        Comfy.TryLoad(icon, comfy.memory, arrow);
+                        Comfy.TryLoad(icon, arrow);
                 if (arrows.sounds.queue.TryDequeue(out var sound))
                     foreach (var arrow in arrows.components)
-                        Audiocraft.TryLoad(sound, audiocraft.memory, arrow);
+                        Audiocraft.TryLoad(sound, arrow);
                 yield return null;
             }
         }
@@ -357,8 +356,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.25f, Time.deltaTime * speed);
                         Shine.volume = Mathf.Lerp(Shine.volume, time / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 7.5f, Time.deltaTime / speed);
-                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 7.5f, Time.deltaTime / speed);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 25f, Time.deltaTime / speed / speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 25f, Time.deltaTime / speed / speed);
                         break;
                     // End choice.
                     case ({ Chosen: true, Icons: ({ } image, { } sound) } chosen, var moving) when chosen == moving:
@@ -373,8 +372,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Shatter.Play();
                             Rumble.Stop();
                             Move.Play();
-                            bloom.intensity.value = 25f;
-                            bloom.color.value = chosen.Color.Color() * 25f;
+                            bloom.intensity.value = 100f;
+                            bloom.color.value = chosen.Color.Color() * 100f;
                             Comfy.Write(comfy.process, version => new() { Version = version, Cancel = new[] { loops.image } });
                             loops.sound = Audiocraft.Write(audiocraft.process, version => clip with
                             {
@@ -422,7 +421,12 @@ Resolution: {resolutions.width}x{resolutions.height}";
             Task<Ollama.Generation[]> GenerateIcons(int image, string positive, string negative, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.components.Select(async arrow =>
             {
                 var random = new System.Random();
-                var generation = await ollama.client.Generate(arrow.Color, await previous);
+                var generations = await previous;
+                var generation = await ollama.client.Generate(arrow.Color, generations, words.OrderByDescending(pair => pair.Value).Select(pair => pair.Key).Take(10));
+                foreach (var word in generation.Image.Split('\n', '\r', '\t', ' '))
+                    words.AddOrUpdate(word.ToLowerInvariant(), 1, (key, value) => value + 1);
+                foreach (var word in generation.Sound.Split('\n', '\r', '\t', ' '))
+                    words.AddOrUpdate(word.ToLowerInvariant(), 1, (key, value) => value + 1);
                 await Task.WhenAll(
                     Task.Run(async () =>
                     {
@@ -466,7 +470,6 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         });
                     })
                 );
-
                 return generation;
             }));
 
@@ -540,6 +543,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Width = width,
                             Height = height,
                             Size = size,
+                            Offset = offset, // Set it here to display in logs.
                             Tags = tags,
                         };
                         Comfy.Log($"Received frame: {frame}");
@@ -549,7 +553,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             {
                                 Index = i,
                                 Offset = offset,
-                                // Data = await comfy.memory.Read(offset, size),
+                                Data = await comfy.memory.Read(offset, size),
                             });
 
                             var now = watch.Elapsed;
@@ -574,7 +578,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Size = size,
                             Tags = tags,
                             Description = description,
-                            // Data = await comfy.memory.Read(offset, size),
+                            Data = await comfy.memory.Read(offset, size),
                         };
                         Comfy.Log($"Received icon: {icon}");
                         arrows.images.queue.Enqueue(icon);
@@ -618,6 +622,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Channels = channels,
                             Count = count,
                             Size = size,
+                            Offset = offset, // Set it here to display in logs.
                             Generation = generation,
                         };
                         Audiocraft.Log($"Received clip: {clip}");
@@ -626,7 +631,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             {
                                 Index = i,
                                 Offset = offset,
-                                // Data = await audiocraft.memory.Read(offset, size),
+                                Data = await audiocraft.memory.Read(offset, size),
                             });
                     }
                     if (arrows.sounds.map.TryRemove((version, tags), out var description))
@@ -642,7 +647,7 @@ Resolution: {resolutions.width}x{resolutions.height}";
                             Size = size,
                             Generation = generation,
                             Description = description,
-                            // Data = await audiocraft.memory.Read(offset, size),
+                            Data = await audiocraft.memory.Read(offset, size),
                         };
                         Audiocraft.Log($"Received icon: {icon}");
                         arrows.sounds.queue.Enqueue(icon);
@@ -673,8 +678,8 @@ Resolution: {resolutions.width}x{resolutions.height}";
             await File.AppendAllLinesAsync(_history, new[] { JsonUtility.ToJson(new Entry
             {
                 Date = DateTime.UtcNow.Ticks,
-                Image = Convert.ToBase64String(image.Data),
-                Sound = Convert.ToBase64String(sound.Data),
+                Image = arrow.Texture == null ? "" : Convert.ToBase64String(arrow.Texture.GetRawTextureData()),
+                Sound = arrow.Sound == null ? "" : Convert.ToBase64String(arrow.Sound.clip.GetRawData()),
                 Color = arrow.Color,
                 Width = image.Width,
                 Height = image.Height,
