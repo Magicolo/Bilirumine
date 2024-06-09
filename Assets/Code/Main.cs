@@ -87,7 +87,7 @@ public sealed class Main : MonoBehaviour
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDebug());
 
-        foreach (var item in Utility.Wait(comfy.Read(), audiocraft.Read(), ArduinoOutput()))
+        foreach (var item in Utility.Wait(comfy.Read(), audiocraft.Read(), arduino.Read(_inputs.Buttons)))
         {
             Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
             Cursor.visible = Application.isEditor;
@@ -263,21 +263,6 @@ Clips: {audiocraft.Clips:0000}
                     arrow.Sound.pitch = Mathf.Lerp(arrow.Sound.pitch, move ? 1f : 0.1f, Time.deltaTime * speed * speed);
                 }
                 arrow.Time = hidden ? 0f : move ? arrow.Time + Time.deltaTime : 0f;
-            }
-        }
-
-        async Task ArduinoOutput()
-        {
-            var index = 0;
-            var buffer = new byte[32];
-            while (arduino is { IsConnected: true, Stream: var stream })
-            {
-                var count = await stream.ReadAsync(buffer);
-                for (int i = 0; i < count; i++)
-                {
-                    if (buffer[i] == byte.MaxValue) index = 0;
-                    else if (index < _inputs.Buttons.Length) _inputs.Buttons[index++] = buffer[i] > 0;
-                }
             }
         }
 
