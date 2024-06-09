@@ -124,6 +124,7 @@ public sealed class Comfy
         public int Height;
         public int Offset;
         public int Size;
+        public byte[] Data = Array.Empty<byte>();
     }
 
     [Serializable]
@@ -137,6 +138,7 @@ public sealed class Comfy
         public int Offset;
         public int Size;
         public string Description = "";
+        public byte[] Data = Array.Empty<byte>();
     }
 
     static readonly ((int width, int height) low, (int width, int height) high) _resolutions = ((768, 512), (1024, 768));
@@ -172,17 +174,6 @@ public sealed class Comfy
         texture.Apply();
     }
 
-    public static void Load(int width, int height, int offset, MemoryMappedFile memory, Image image, ref Texture2D? texture)
-    {
-        Load(width, height, offset, memory, ref texture);
-        var area = new Rect(0f, 0f, width, height);
-        var sprite = Sprite.Create(texture, area, area.center);
-        image.sprite = sprite;
-    }
-
-    public static void Load(Frame frame, MemoryMappedFile memory, Image image, ref Texture2D? texture) =>
-        Load(frame.Width, frame.Height, frame.Offset, memory, image, ref texture);
-
     public static void Load(int width, int height, byte[] data, ref Texture2D? texture)
     {
         if (texture == null || texture.width != width || texture.height != height)
@@ -190,6 +181,14 @@ public sealed class Comfy
 
         texture.LoadRawTextureData(data);
         texture.Apply();
+    }
+
+    public static void Load(int width, int height, int offset, MemoryMappedFile memory, Image image, ref Texture2D? texture)
+    {
+        Load(width, height, offset, memory, ref texture);
+        var area = new Rect(0f, 0f, width, height);
+        var sprite = Sprite.Create(texture, area, area.center);
+        image.sprite = sprite;
     }
 
     public static void Load(int width, int height, byte[] data, Image image, ref Texture2D? texture)
@@ -200,26 +199,23 @@ public sealed class Comfy
         image.sprite = sprite;
     }
 
-    // public static void Load(Frame frame, Image image, ref Texture2D? texture)
-    // {
-    //     Load(frame.Width, frame.Height, frame.Data, image, ref texture);
-    //     Pool<byte>.Put(ref frame.Data);
-    // }
+    public static void Load(Icon icon, MemoryMappedFile memory, Image image, ref Texture2D? texture)
+    {
+        if (icon.Data.Length > 0)
+            Load(icon.Width, icon.Height, icon.Data, image, ref texture);
+        else
+            Load(icon.Width, icon.Height, icon.Offset, memory, image, ref texture);
+        Pool<byte>.Put(ref icon.Data);
+    }
 
-    // public static bool TryLoad(Icon icon, Arrow arrow)
-    // {
-    //     if (icon.Tags.HasFlag(arrow.Tags))
-    //     {
-    //         var texture = arrow.Texture;
-    //         Load(icon.Width, icon.Height, icon.Data, arrow.Image, ref texture);
-    //         arrow.Texture = texture;
-    //         arrow.Icons.image = icon;
-    //         Pool<byte>.Put(ref icon.Data);
-    //         return true;
-    //     }
-    //     else
-    //         return false;
-    // }
+    public static void Load(Frame frame, MemoryMappedFile memory, Image image, ref Texture2D? texture)
+    {
+        if (frame.Data.Length > 0)
+            Load(frame.Width, frame.Height, frame.Data, ref texture);
+        else
+            Load(frame.Width, frame.Height, frame.Offset, memory, image, ref texture);
+        Pool<byte>.Put(ref frame.Data);
+    }
 
     public static void Log(string message) => Utility.Log(nameof(Comfy), message);
     public static void Warn(string message) => Utility.Warn(nameof(Comfy), message);
@@ -352,7 +348,12 @@ public sealed class Comfy
                     };
                     for (int i = 0; i < response.count; i++, offset += size)
                     {
-                        _frames.Enqueue(frame with { Index = i, Offset = offset });
+                        _frames.Enqueue(frame with
+                        {
+                            Index = i,
+                            Offset = offset,
+                            Data = await _memory.Read(offset, size),
+                        });
                         var now = watch.Elapsed;
                         if (_deltas.images.TryDequeue(out var ___)) _deltas.images.Enqueue(now - then.image);
                         then.image = now;
@@ -375,6 +376,7 @@ public sealed class Comfy
                         Width = response.width,
                         Height = response.height,
                         Description = response.description,
+                        Data = await _memory.Read(offset, size),
                     });
                 }
             }

@@ -87,6 +87,7 @@ public sealed class Audiocraft
         public int Offset;
         public int Size;
         public int Generation;
+        public byte[] Data = Array.Empty<byte>();
         public float Duration => (float)Samples / Rate;
     }
 
@@ -102,6 +103,7 @@ public sealed class Audiocraft
         public int Size;
         public int Generation;
         public string Description = "";
+        public byte[] Data = Array.Empty<byte>();
         public float Duration => (float)Samples / Rate;
     }
 
@@ -123,9 +125,6 @@ public sealed class Audiocraft
         finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
     }
 
-    public static void Load(Clip clip, MemoryMappedFile memory, ref AudioClip? audio) =>
-        Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, memory, ref audio);
-
     public static bool Load(int rate, int samples, int channels, byte[] data, ref AudioClip? audio)
     {
         if (audio == null || audio.samples != samples || audio.channels != channels)
@@ -134,29 +133,23 @@ public sealed class Audiocraft
         return audio.SetData(MemoryMarshal.Cast<byte, float>(data), 0);
     }
 
-    // public static bool Load(Clip clip, ref AudioClip? audio)
-    // {
-    //     if (Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio))
-    //     {
-    //         Pool<byte>.Put(ref clip.Data);
-    //         return true;
-    //     }
-    //     else return false;
-    // }
+    public static void Load(Clip clip, MemoryMappedFile memory, ref AudioClip? audio)
+    {
+        if (clip.Data.Length > 0)
+            Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
+        else
+            Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, memory, ref audio);
+        Pool<byte>.Put(ref clip.Data);
+    }
 
-    // public static bool TryLoad(Icon icon, Arrow arrow)
-    // {
-    //     var audio = arrow.Audio;
-    //     if (icon.Tags.HasFlag(arrow.Tags) && Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio))
-    //     {
-    //         arrow.Audio = audio;
-    //         arrow.Sound.clip = arrow.Audio;
-    //         arrow.Icons.sound = icon;
-    //         Pool<byte>.Put(ref icon.Data);
-    //         return true;
-    //     }
-    //     else return false;
-    // }
+    public static void Load(Icon icon, MemoryMappedFile memory, ref AudioClip? audio)
+    {
+        if (icon.Data.Length > 0)
+            Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
+        else
+            Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, memory, ref audio);
+        Pool<byte>.Put(ref icon.Data);
+    }
 
     public static void Log(string message) => Utility.Log(nameof(Audiocraft), message);
     public static void Warn(string message) => Utility.Warn(nameof(Audiocraft), message);
@@ -231,7 +224,7 @@ public sealed class Audiocraft
                     if (icon.Tags.HasFlag(arrow.Tags))
                     {
                         var audio = arrow.Audio;
-                        Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, _memory, ref audio);
+                        Load(icon, _memory, ref audio);
                         arrow.Audio = audio;
                         arrow.Sound.clip = arrow.Audio;
                         arrow.Icons.sound = icon;
@@ -332,7 +325,12 @@ public sealed class Audiocraft
                         Generation = response.generation,
                     };
                     for (int i = 0; i < response.count; i++, offset += size)
-                        _clips.Enqueue(clip with { Index = i, Offset = offset });
+                        _clips.Enqueue(clip with
+                        {
+                            Index = i,
+                            Offset = offset,
+                            Data = await _memory.Read(offset, size),
+                        });
                 }
                 if (tags.HasFlag(Tags.Icon))
                 {
@@ -347,6 +345,7 @@ public sealed class Audiocraft
                         Channels = response.channels,
                         Generation = response.generation,
                         Description = response.description,
+                        Data = await _memory.Read(offset, size),
                     });
                 }
             }
