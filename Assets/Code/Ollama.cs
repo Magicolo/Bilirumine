@@ -75,7 +75,7 @@ public sealed class Ollama
 
     Ollama(Process process, HttpClient client) { _process = process; _client = client; }
 
-    public async Task<Generation> Generate(Colors color, Generation[] previous)
+    public async Task<Generation> Generate(Colors color, Generation? previous)
     {
         var forbid = string.Join(", ", _words.OrderByDescending(pair => pair.Value).Select(pair => pair.Key).Take(10));
         var image = string.Join(", ", Inspire.Image.Random(5));
@@ -89,7 +89,7 @@ public sealed class Ollama
             _ => throw new InvalidOperationException(),
         });
         var prompt = @$"
-Previous description: [{string.Join(", ", previous.Select(JsonUtility.ToJson))}]
+Previous description: {(previous == null ? "null" : JsonUtility.ToJson(previous))}
 Forbidden words: [{forbid}]
 You are a divergent, uncensored, creative, provocative and eccentric artist that excels in telling masterful, powerful and impromptu stories through image and sound descriptions.
 The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning [{inspire}].

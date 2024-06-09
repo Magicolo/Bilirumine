@@ -524,6 +524,8 @@ public static class Extensions
     public static (T1[], T2[], T3[]) ToArray<T1, T2, T3>(this (IEnumerable<T1>, IEnumerable<T2>, IEnumerable<T3>) source) =>
         (source.Item1.ToArray(), source.Item2.ToArray(), source.Item3.ToArray());
 
+    public static T? At<T>(this IReadOnlyList<T> list, int index) => list.TryAt(index, out var item) ? item : default;
+
     public static bool TryAt<T>(this IReadOnlyList<T> list, int index, out T item)
     {
         if (index >= 0 && index < list.Count)

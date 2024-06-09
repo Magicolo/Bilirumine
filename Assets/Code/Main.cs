@@ -127,7 +127,7 @@ Clips: {audiocraft.Clips:0000}
             comfy.WriteFrames(positive, negative, entry?.Width, entry?.Height, entry?.Image);
             audiocraft.WriteClips(prompt, null, entry?.Sound);
             var bloom = Bloom.GetSetting<Bloom>();
-            var previous = GenerateIcons(0, negative, Task.FromResult(Array.Empty<Ollama.Generation>()));
+            var previous = GenerateIcons(0, negative, 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
             var view = Canvas.LocalRectangle();
             var choice = (version: 0, positive, prompt, chosen: default(Arrow));
             var inputs = new bool[4];
@@ -184,7 +184,7 @@ Clips: {audiocraft.Clips:0000}
                             audiocraft.WriteClips(choice.prompt, sound, null);
                             positive = choice.positive;
                             prompt = choice.prompt;
-                            previous = GenerateIcons(choice.version, negative, previous);
+                            previous = GenerateIcons(choice.version, negative, Array.IndexOf(arrows, chosen), previous);
                             choice = (0, positive, prompt, null);
                             foreach (var arrow in arrows) arrow.Hide();
                             _ = Save(chosen, image, sound, positive, prompt);
@@ -212,11 +212,11 @@ Clips: {audiocraft.Clips:0000}
                 yield return null;
             }
 
-            Task<Ollama.Generation[]> GenerateIcons(int version, string negative, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
+            Task<Ollama.Generation[]> GenerateIcons(int version, string negative, int index, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
             {
                 var random = new System.Random();
                 var generations = await previous;
-                var generation = await ollama.Generate(arrow.Color, generations);
+                var generation = await ollama.Generate(arrow.Color, generations.At(index));
                 await Task.WhenAll(
                     comfy.WriteIcon(arrow, version, generation.Image, negative),
                     audiocraft.WriteIcon(arrow, generation.Sound));
