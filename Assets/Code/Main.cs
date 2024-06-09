@@ -1,6 +1,5 @@
 #nullable enable
 
-using System.Diagnostics;
 using UnityEngine;
 using System;
 using System.Collections.Concurrent;
@@ -9,18 +8,13 @@ using System.Threading.Tasks;
 using TMPro;
 using System.Linq;
 using UnityEngine.UI;
-using Debug = UnityEngine.Debug;
 using Random = UnityEngine.Random;
-using System.Collections.Generic;
 using UnityEngine.Rendering.PostProcessing;
 using System.IO;
 
 /*
     TODO
-    - If docker containers stop generating, restart them?
-    - Saving the icon's data can fail if its been overwritten.
-        - Extract data from the 'Texture' and 'AudioClip'?
-    - Use a llava model as an LLM to generate prompts given the current image?
+    - Fix the bug with 'sound.py/load': generates aggressive noise
 */
 sealed class Inputs
 {
@@ -54,11 +48,6 @@ sealed record Entry
 
 public sealed class Main : MonoBehaviour
 {
-    static readonly ((int width, int height) low, (int width, int height) high) _resolutions =
-    (
-        (768, 512),
-        (1024, 768)
-    );
     static readonly string _history = Path.Join(Application.streamingAssetsPath, "history.json");
 
     public RectTransform Canvas = default!;
@@ -78,17 +67,6 @@ public sealed class Main : MonoBehaviour
     public TMP_Text Statistics = default!;
     public PostProcessProfile Bloom = default!;
 
-    float Volume => Mathf.Clamp01(_volume * _motion);
-
-    Comfy.Frame _frame = new();
-    Audiocraft.Clip _clip = new();
-    bool _play = true;
-    int _begin;
-    int _end;
-    float _volume = 1f;
-    float _pitch = 1f;
-    float _motion = 1f;
-    readonly (HashSet<int> image, HashSet<int> sound) _cancel = (new(), new());
     readonly Inputs _inputs = new();
 
     IEnumerator Start()
@@ -99,113 +77,21 @@ public sealed class Main : MonoBehaviour
         var ollama = Ollama.Create();
         yield return new WaitForSeconds(5f);
 
-        var words = new ConcurrentDictionary<string, int>();
-        var resolutions = (width: 0, height: 0);
-        var delta = (image: 0.1f, batch: 5f, wait: 0.1f, speed: 1f);
-        var deltas = (
-            images: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(delta.image))),
-            batches: new ConcurrentQueue<TimeSpan>(Enumerable.Range(0, 5).Select(_ => TimeSpan.FromSeconds(delta.batch))));
-        var frames = new ConcurrentQueue<Comfy.Frame>();
-        var clips = new ConcurrentQueue<Audiocraft.Clip>();
-        var arrows = (
-            components: new[] { Left, Right, Up, Down },
-            images: (queue: new ConcurrentQueue<Comfy.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()),
-            sounds: (queue: new ConcurrentQueue<Audiocraft.Icon>(), map: new ConcurrentDictionary<(int version, Tags tags), string>()));
-        StartCoroutine(UpdateFrames());
-        StartCoroutine(UpdateClips());
-        StartCoroutine(UpdateArrows());
+        var arrows = new[] { Left, Right, Up, Down };
+        StartCoroutine(comfy.UpdateFrames(Output));
+        StartCoroutine(comfy.UpdateIcons(arrows));
+        StartCoroutine(comfy.UpdateDelta());
+        StartCoroutine(audiocraft.UpdateClips(In, Out));
+        StartCoroutine(audiocraft.UpdateIcons(arrows));
+        StartCoroutine(audiocraft.UpdatePause());
         StartCoroutine(UpdateState());
-        StartCoroutine(UpdateDelta());
         StartCoroutine(UpdateDebug());
 
-        foreach (var item in Utility.Wait(ComfyOutput(), AudiocraftOutput(), ArduinoOutput()))
+        foreach (var item in Utility.Wait(comfy.Read(), audiocraft.Read(), ArduinoOutput()))
         {
             Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
             Cursor.visible = Application.isEditor;
             yield return item;
-        }
-
-        IEnumerator UpdateFrames()
-        {
-            var time = Time.time;
-            var main = default(Texture2D);
-            var load = default(Texture2D);
-            while (true)
-            {
-                if (_play && frames.TryDequeue(out var frame))
-                {
-                    if (_cancel.image.Contains(frame.Version)) continue;
-                    else _frame = frame;
-
-                    while (Time.time - time < delta.wait / delta.speed) yield return null;
-                    time += delta.wait / delta.speed;
-                    Comfy.Load(frame, Output, ref load);
-                    (main, load) = (load, main);
-                    resolutions = (frame.Width, frame.Height);
-                }
-                else time = Time.time;
-                yield return null;
-            }
-        }
-
-        IEnumerator UpdateClips()
-        {
-            var main = default(AudioClip);
-            var load = default(AudioClip);
-            while (true)
-            {
-                if (clips.TryDequeue(out var clip))
-                {
-                    if (_cancel.sound.Contains(clip.Version)) continue;
-                    else _clip = clip;
-
-                    Audiocraft.Load(clip, ref load);
-                    In.clip = load;
-                    In.volume = 0f;
-                    (main, load) = (load, main);
-                    var fade = clip.Overlap * clip.Duration;
-                    while (!Utility.Chain(Out, In, Volume, _pitch, fade)) yield return null;
-                    (In, Out) = (Out, In);
-                }
-                else
-                {
-                    In.volume = Mathf.Lerp(In.volume, 0, Time.deltaTime);
-                    In.pitch = Mathf.Lerp(In.pitch, _pitch, Time.deltaTime);
-                    Out.volume = Mathf.Lerp(Out.volume, Volume, Time.deltaTime);
-                    Out.pitch = Mathf.Lerp(Out.pitch, _pitch, Time.deltaTime);
-                }
-
-                yield return null;
-            }
-        }
-
-        IEnumerator UpdateArrows()
-        {
-            while (true)
-            {
-                if (arrows.images.queue.TryDequeue(out var icon))
-                    foreach (var arrow in arrows.components)
-                        Comfy.TryLoad(icon, arrow);
-                if (arrows.sounds.queue.TryDequeue(out var sound))
-                    foreach (var arrow in arrows.components)
-                        Audiocraft.TryLoad(sound, arrow);
-                yield return null;
-            }
-        }
-
-        IEnumerator UpdateDelta()
-        {
-            while (true)
-            {
-                delta.image = deltas.images.Select(delta => (float)delta.TotalSeconds).Average();
-                delta.batch = deltas.batches.Select(delta => (float)delta.TotalMinutes).Average();
-                delta.wait = Mathf.Lerp(delta.wait, delta.image, Time.deltaTime);
-
-                var rate = 10f / delta.wait;
-                var ratio = Mathf.Pow(Mathf.Clamp01(frames.Count / rate), 2f);
-                delta.speed = Mathf.Lerp(delta.speed, 0.5f + ratio, Time.deltaTime * 0.25f);
-                yield return null;
-            }
         }
 
         IEnumerator UpdateDebug()
@@ -217,14 +103,15 @@ public sealed class Main : MonoBehaviour
                 if (show)
                 {
                     Statistics.text = $@"
-Images Per Second: {1f / delta.image:00.000}
-Batches Per Minute: {1f / delta.batch:00.000}
-Rate: {delta.speed / delta.wait:00.000}
-Wait: {delta.wait:0.0000}
-Speed: {delta.speed:0.0000}
-Frames: {frames.Count:0000}
-Clips: {clips.Count:0000}
-Resolution: {resolutions.width}x{resolutions.height}";
+Images Per Second: {comfy.Images:00.000}
+Batches Per Minute: {comfy.Batches:00.000}
+Resolution: {comfy.Resolution.width}x{comfy.Resolution.height}
+Rate: {comfy.Rate:00.000}
+Wait: {comfy.Wait:0.0000}
+Speed: {comfy.Speed:0.0000}
+Frames: {comfy.Frames:0000}
+Clips: {audiocraft.Clips:0000}
+";
                 }
                 else
                     Statistics.text = "";
@@ -239,77 +126,29 @@ Resolution: {resolutions.width}x{resolutions.height}";
             var entry = task.Result;
             var speed = 3.75f;
             var styles = Utility.Styles("ultra detailed", "hyper realistic", "complex", "dense", "sharp");
+            var negative = string.Join(", ", "low detail", "plain", "simple", "sparse", "blurry", "worst quality", "nude", "nudity", "naked", "sexy", "sexual", "genital", "child", "children", "teenager", "woman");
             var positive = entry?.Positive ?? string.Join(", ", Inspire.Image.Random(25));
             var prompt = entry?.Prompt ?? string.Join(", ", Inspire.Sound.Random(10));
-            var negative = string.Join(", ", "low detail", "plain", "simple", "sparse", "blurry", "worst quality", "nude", "nudity", "naked", "sexy", "sexual", "genital", "child", "children", "teenager", "woman");
-            var frame = new Comfy.State()
-            {
-                Tags = Tags.Frame,
-                Width = _resolutions.high.width,
-                Height = _resolutions.high.height,
-                Loop = true,
-                Zoom = 64,
-                Steps = 6,
-                Guidance = 5f,
-                Denoise = 0.7f,
-                Negative = negative,
-                Full = true,
-            };
-            var clip = new Audiocraft.State()
-            {
-                Tags = Tags.Clip,
-                Loop = true,
-                Duration = 10f,
-                Overlap = 0.5f
-            };
-            var loops = (
-                image: Comfy.Write(comfy.process, version => frame with
-                {
-                    Version = version,
-                    Positive = positive,
-                    Empty = true,
-                    Data = entry?.Image ?? "",
-                    Shape = (entry?.Width ?? 0, entry?.Height ?? 0)
-                }),
-                sound: Audiocraft.Write(audiocraft.process, version => clip with
-                {
-                    Version = version,
-                    Prompts = new[] { prompt },
-                    Empty = true,
-                    Data = entry?.Sound ?? ""
-                })
-            );
-            var pause = false;
+            comfy.WriteFrames(positive, negative, entry?.Width, entry?.Height, entry?.Image);
+            audiocraft.WriteClips(prompt, null, entry?.Sound);
             var bloom = Bloom.GetSetting<Bloom>();
-            var previous = GenerateIcons(0, positive, negative, Task.FromResult(Array.Empty<Ollama.Generation>()));
+            var previous = GenerateIcons(0, negative, Task.FromResult(Array.Empty<Ollama.Generation>()));
             var view = Canvas.LocalRectangle();
             var choice = (version: 0, positive, prompt, chosen: default(Arrow));
             var inputs = new bool[4];
             while (true)
             {
                 Utility.Or(_inputs.Buttons, _inputs.Arrows, inputs);
-                UpdateIcon(Left, arrows.components, speed, 1, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
-                UpdateIcon(Right, arrows.components, speed, 0, inputs, loops.image, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
-                UpdateIcon(Up, arrows.components, speed, 2, inputs, loops.image, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
-                UpdateIcon(Down, arrows.components, speed, 3, inputs, loops.image, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
+                UpdateIcon(Left, arrows, speed, 1, inputs, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
+                UpdateIcon(Right, arrows, speed, 0, inputs, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
+                UpdateIcon(Up, arrows, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
+                UpdateIcon(Down, arrows, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 
-                switch (pause, clips.Count(clip => clip.Version == loops.sound))
-                {
-                    case (false, > 5):
-                        Audiocraft.Write(audiocraft.process, version => new() { Version = version, Pause = new[] { loops.sound } });
-                        pause = true;
-                        break;
-                    case (true, < 5):
-                        Audiocraft.Write(audiocraft.process, version => new() { Version = version, Resume = new[] { loops.sound } });
-                        pause = false;
-                        break;
-                }
-
-                switch ((choice.chosen, arrows.components.FirstOrDefault(arrow => arrow.Moving)))
+                switch ((choice.chosen, arrows.FirstOrDefault(arrow => arrow.Moving)))
                 {
                     // Begin choice.
                     case (null, { Icons: ({ } image, { } sound) } moving):
-                        _play = false;
+                        comfy.Set(play: false);
                         Select.PlayWith(pitch: (0.75f, 1.5f));
                         Rumble.Play();
                         Shine.Play();
@@ -319,95 +158,55 @@ Resolution: {resolutions.width}x{resolutions.height}";
                         choice.chosen = moving;
                         choice.positive = $"{styles} ({moving.Color}) {image.Description}";
                         choice.prompt = $"({moving.Color}) {sound.Description}";
-                        choice.version = Comfy.Write(comfy.process, version => Comfy.State.Sequence(
-                            frame with
-                            {
-                                Version = version,
-                                Tags = frame.Tags | Tags.Move,
-                                Loop = false,
-                                Offset = _frame.Offset,
-                                Size = _frame.Size,
-                                Generation = _frame.Generation,
-                                Shape = (_frame.Width, _frame.Height),
-                                Width = _resolutions.low.width,
-                                Height = _resolutions.low.height,
-                                Steps = 5,
-                                Guidance = 6f,
-                                Denoise = 0.4f,
-                                Pause = new[] { loops.image },
-                                Left = Math.Max(-moving.Direction.x, 0),
-                                Right = Math.Max(moving.Direction.x, 0),
-                                Top = Math.Max(moving.Direction.y, 0),
-                                Bottom = Math.Max(-moving.Direction.y, 0),
-                            },
-                            state => state with { Tags = state.Tags | Tags.Begin, Positive = $"{positive}" },
-                            state => state with { Positive = $"{positive} {choice.positive}" },
-                            state => state with { Positive = $"{choice.positive} {positive}" },
-                            state => state with { Tags = state.Tags | Tags.End, Positive = $"{choice.positive}" },
-                            _ => frame with { Version = version, Positive = $"{choice.positive}" }
-                        ));
-                        Debug.Log($"MAIN: Begin choice '{choice}' with frame '{_frame}'.");
+                        choice.version = comfy.WriteBegin(moving, (positive, choice.positive), negative);
+                        Utility.Log(nameof(Main), $"Begin choice '{choice}'.");
                         break;
                     // Continue choice.
                     case ({ Chosen: false } chosen, var moving) when chosen == moving:
-                        _play = false;
-                        _volume = Mathf.Lerp(_volume, 0f, Time.deltaTime * speed);
+                        comfy.Set(play: false);
+                        audiocraft.Set(volume: 0f, time: Time.deltaTime * speed);
                         var time = Mathf.Max(chosen.Time - 3.75f, 0f);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.25f, Time.deltaTime * speed);
                         Shine.volume = Mathf.Lerp(Shine.volume, time / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 25f, Time.deltaTime / speed / speed);
-                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 25f, Time.deltaTime / speed / speed);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 50f, Time.deltaTime / speed / speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 50f, Time.deltaTime / speed / speed);
                         break;
                     // End choice.
                     case ({ Chosen: true, Icons: ({ } image, { } sound) } chosen, var moving) when chosen == moving:
-                        if (_begin >= choice.version)
+                        if (comfy.Has(begin: choice.version))
                         {
-                            Debug.Log($"MAIN: End choice '{choice}'.");
-                            _play = true;
-                            _motion = -1f;
-                            _cancel.image.Add(loops.image);
-                            _cancel.sound.Add(loops.sound);
+                            Utility.Log(nameof(Main), $"End choice '{choice}'.");
                             Flash.color = chosen.Color.Color();
                             Shatter.Play();
                             Rumble.Stop();
                             Move.Play();
                             bloom.intensity.value = 100f;
                             bloom.color.value = chosen.Color.Color() * 100f;
-                            Comfy.Write(comfy.process, version => new() { Version = version, Cancel = new[] { loops.image } });
-                            loops.sound = Audiocraft.Write(audiocraft.process, version => clip with
-                            {
-                                Version = version,
-                                Offset = sound.Offset,
-                                Size = sound.Size,
-                                Generation = sound.Generation,
-                                // If the sound could not be loaded (ex: overwritten), allow generation from scratch.
-                                Empty = true,
-                                Cancel = new[] { loops.sound },
-                                Prompts = new[] { choice.prompt }
-                            });
-                            loops.image = choice.version;
+                            comfy.Set(play: true);
+                            comfy.WriteEnd();
+                            audiocraft.Set(motion: -1f);
+                            audiocraft.WriteClips(choice.prompt, sound, null);
                             positive = choice.positive;
                             prompt = choice.prompt;
+                            previous = GenerateIcons(choice.version, negative, previous);
                             choice = (0, positive, prompt, null);
-                            previous = GenerateIcons(loops.image, positive, negative, previous);
-                            foreach (var arrow in arrows.components) arrow.Hide();
+                            foreach (var arrow in arrows) arrow.Hide();
                             _ = Save(chosen, image, sound, positive, prompt);
                         }
                         break;
                     // Cancel choice.
                     case ({ } chosen, var moving) when chosen != moving:
-                        Debug.Log($"MAIN: Cancel choice '{choice}'.");
-                        _play = true;
-                        _cancel.image.Add(choice.version);
+                        Utility.Log(nameof(Main), $"Cancel choice '{choice}'.");
                         Rumble.Stop();
-                        Comfy.Write(comfy.process, version => new() { Version = version, Resume = new[] { loops.image }, Cancel = new[] { choice.version } });
+                        comfy.Set(play: true);
+                        comfy.WriteCancel(choice.version);
                         choice = (0, positive, prompt, null);
                         break;
                     case (null, null):
-                        _play = true;
-                        _volume = Mathf.Lerp(_volume, 1f, Time.deltaTime * speed);
-                        _motion = Mathf.Lerp(_motion, 1f, Time.deltaTime / speed / speed);
+                        comfy.Set(play: true);
+                        audiocraft.Set(volume: 1f, time: Time.deltaTime * speed);
+                        audiocraft.Set(motion: 1f, time: Time.deltaTime / speed / speed);
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.1f, Time.deltaTime);
                         Shine.volume = Mathf.Lerp(Shine.volume, 0f, Time.deltaTime);
@@ -418,62 +217,18 @@ Resolution: {resolutions.width}x{resolutions.height}";
                 yield return null;
             }
 
-            Task<Ollama.Generation[]> GenerateIcons(int image, string positive, string negative, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.components.Select(async arrow =>
+            Task<Ollama.Generation[]> GenerateIcons(int version, string negative, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
             {
                 var random = new System.Random();
                 var generations = await previous;
-                var generation = await ollama.client.Generate(arrow.Color, generations, words.OrderByDescending(pair => pair.Value).Select(pair => pair.Key).Take(10));
-                foreach (var word in generation.Image.Split('\n', '\r', '\t', ' '))
-                    words.AddOrUpdate(word.ToLowerInvariant(), 1, (key, value) => value + 1);
-                foreach (var word in generation.Sound.Split('\n', '\r', '\t', ' '))
-                    words.AddOrUpdate(word.ToLowerInvariant(), 1, (key, value) => value + 1);
+                var generation = await ollama.Generate(arrow.Color, generations);
                 await Task.WhenAll(
-                    Task.Run(async () =>
-                    {
-                        while (_end < image) await Task.Delay(100);
-                        Comfy.Write(comfy.process, version =>
-                        {
-                            var tags = Tags.Icon | arrow.Tags;
-                            var positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {generation.Image}";
-                            arrows.images.map.TryAdd((version, tags), generation.Image);
-                            return new()
-                            {
-                                Version = version,
-                                Tags = tags,
-                                Load = $"{arrow.Color}.png".ToLowerInvariant(),
-                                Positive = positive,
-                                Negative = negative,
-                                Width = 512,
-                                Height = 512,
-                                Steps = 5,
-                                Guidance = 6f,
-                                Denoise = 0.7f,
-                            };
-                        });
-                    }),
-                    Task.Run(async () =>
-                    {
-                        while (clips.Count < 5) await Task.Delay(100);
-                        Audiocraft.Write(audiocraft.process, version =>
-                        {
-                            var tags = Tags.Icon | arrow.Tags;
-                            var prompt = $"{Utility.Styles("punchy", "jingle", "stinger", "notification")} ({arrow.Color}) {generation.Sound}";
-                            arrows.sounds.map.TryAdd((version, tags), generation.Sound);
-                            return new()
-                            {
-                                Version = version,
-                                Tags = tags,
-                                Duration = 10f,
-                                Empty = true,
-                                Prompts = new[] { prompt },
-                            };
-                        });
-                    })
-                );
+                    comfy.WriteIcon(arrow, version, generation.Image, negative),
+                    audiocraft.WriteIcon(arrow, generation.Sound));
                 return generation;
             }));
 
-            void UpdateIcon(Arrow arrow, Arrow[] arrows, float speed, int index, bool[] inputs, int image, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
+            void UpdateIcon(Arrow arrow, Arrow[] arrows, float speed, int index, bool[] inputs, Func<Vector2, Vector2> choose, Func<Vector2, Vector2> peek, Func<Vector2, Vector2> hide)
             {
                 var hidden = arrows.Any(arrow => arrow.Hidden);
                 var move = !hidden && inputs[index] &&
@@ -508,154 +263,6 @@ Resolution: {resolutions.width}x{resolutions.height}";
                     arrow.Sound.pitch = Mathf.Lerp(arrow.Sound.pitch, move ? 1f : 0.1f, Time.deltaTime * speed * speed);
                 }
                 arrow.Time = hidden ? 0f : move ? arrow.Time + Time.deltaTime : 0f;
-            }
-        }
-
-        async Task ComfyOutput()
-        {
-            var watch = Stopwatch.StartNew();
-            var then = (image: watch.Elapsed, batch: watch.Elapsed);
-            while (!comfy.process.HasExited)
-            {
-                var line = await comfy.process.StandardOutput.ReadLineAsync();
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
-                {
-                    var index = 0;
-                    var splits = line.Split(",", StringSplitOptions.None);
-                    var version = int.Parse(splits[index++]);
-                    var tags = (Tags)int.Parse(splits[index++]);
-                    var width = int.Parse(splits[index++]);
-                    var height = int.Parse(splits[index++]);
-                    var count = int.Parse(splits[index++]);
-                    var offset = int.Parse(splits[index++]);
-                    var size = int.Parse(splits[index++]) / count;
-                    var generation = int.Parse(splits[index++]);
-                    if (tags.HasFlag(Tags.Begin)) _begin = version;
-                    if (tags.HasFlag(Tags.End)) _end = version;
-                    if (tags.HasFlag(Tags.Frame))
-                    {
-                        var frame = new Comfy.Frame
-                        {
-                            Version = version,
-                            Generation = generation,
-                            Count = count,
-                            Width = width,
-                            Height = height,
-                            Size = size,
-                            Offset = offset, // Set it here to display in logs.
-                            Tags = tags,
-                        };
-                        Comfy.Log($"Received frame: {frame}");
-                        for (int i = 0; i < count; i++, offset += size)
-                        {
-                            frames.Enqueue(frame with
-                            {
-                                Index = i,
-                                Offset = offset,
-                                Data = await comfy.memory.Read(offset, size),
-                            });
-
-                            var now = watch.Elapsed;
-                            if (deltas.images.TryDequeue(out _)) deltas.images.Enqueue(now - then.image);
-                            then.image = now;
-                        }
-                        {
-                            var now = watch.Elapsed;
-                            if (deltas.batches.TryDequeue(out _)) deltas.batches.Enqueue(now - then.batch);
-                            then.batch = now;
-                        }
-                    }
-                    if (arrows.images.map.TryRemove((version, tags), out var description))
-                    {
-                        var icon = new Comfy.Icon
-                        {
-                            Version = version,
-                            Generation = generation,
-                            Width = width,
-                            Height = height,
-                            Offset = offset,
-                            Size = size,
-                            Tags = tags,
-                            Description = description,
-                            Data = await comfy.memory.Read(offset, size),
-                        };
-                        Comfy.Log($"Received icon: {icon}");
-                        arrows.images.queue.Enqueue(icon);
-                    }
-                }
-                catch (FormatException) { Comfy.Warn(line); }
-                catch (IndexOutOfRangeException) { Comfy.Warn(line); }
-                catch (Exception exception) { Debug.LogException(exception); }
-            }
-        }
-
-        async Task AudiocraftOutput()
-        {
-            while (!audiocraft.process.HasExited)
-            {
-                var line = await audiocraft.process.StandardOutput.ReadLineAsync();
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                try
-                {
-                    var index = 0;
-                    var splits = line.Split(",", StringSplitOptions.None);
-                    var version = int.Parse(splits[index++]);
-                    var tags = (Tags)int.Parse(splits[index++]);
-                    var overlap = float.Parse(splits[index++]);
-                    var rate = int.Parse(splits[index++]);
-                    var samples = int.Parse(splits[index++]);
-                    var channels = int.Parse(splits[index++]);
-                    var count = int.Parse(splits[index++]);
-                    var offset = int.Parse(splits[index++]);
-                    var size = int.Parse(splits[index++]) / count;
-                    var generation = int.Parse(splits[index++]);
-                    if (tags.HasFlag(Tags.Clip))
-                    {
-                        var clip = new Audiocraft.Clip
-                        {
-                            Version = version,
-                            Tags = tags,
-                            Rate = rate,
-                            Overlap = overlap,
-                            Samples = samples,
-                            Channels = channels,
-                            Count = count,
-                            Size = size,
-                            Offset = offset, // Set it here to display in logs.
-                            Generation = generation,
-                        };
-                        Audiocraft.Log($"Received clip: {clip}");
-                        for (int i = 0; i < count; i++, offset += size)
-                            clips.Enqueue(clip with
-                            {
-                                Index = i,
-                                Offset = offset,
-                                Data = await audiocraft.memory.Read(offset, size),
-                            });
-                    }
-                    if (arrows.sounds.map.TryRemove((version, tags), out var description))
-                    {
-                        var icon = new Audiocraft.Icon
-                        {
-                            Version = version,
-                            Tags = tags,
-                            Rate = rate,
-                            Samples = samples,
-                            Channels = channels,
-                            Offset = offset,
-                            Size = size,
-                            Generation = generation,
-                            Description = description,
-                            Data = await audiocraft.memory.Read(offset, size),
-                        };
-                        Audiocraft.Log($"Received icon: {icon}");
-                        arrows.sounds.queue.Enqueue(icon);
-                    }
-                }
-                catch (FormatException) { Audiocraft.Warn(line); }
-                catch (IndexOutOfRangeException) { Audiocraft.Warn(line); }
-                catch (Exception exception) { Debug.LogException(exception); }
             }
         }
 

@@ -1,4 +1,4 @@
-import sys, threading, mmap, utility, torch, base64
+import sys, threading, mmap, utility, torch, base64, json
 from typing import Optional
 from queue import SimpleQueue
 
@@ -15,7 +15,7 @@ def load(state: dict, memory: Optional[mmap.mmap] = None):
         data = None
 
     if data is not None:
-        loaded = torch.frombuffer(data, dtype=torch.float32)
+        loaded = torch.tensor(bytearray(data), dtype=torch.float32)
         loaded = loaded.reshape(1, 1, len(loaded))
         return loaded
 
@@ -66,9 +66,23 @@ def write(receive: SimpleQueue):
     with utility.memory("sound", mmap.ACCESS_WRITE) as memory:
         for state, _, outputs in utility.work(receive, steps):
             (samples, channels, count, offset, size, generation) = outputs
-            utility.output(
-                f'{state["version"]},{state["tags"]},{state["overlap"]},{RATE},{samples},{channels},{count},{offset},{size},{generation}'
+            response = json.dumps(
+                {
+                    "version": state["version"],
+                    "tags": state["tags"],
+                    "loop": state["loop"],
+                    "description": state["description"],
+                    "overlap": state["overlap"],
+                    "rate": RATE,
+                    "samples": samples,
+                    "channels": channels,
+                    "count": count,
+                    "offset": offset,
+                    "size": size,
+                    "generation": generation,
+                }
             )
+            utility.output(response)
 
 
 RATE = 32000

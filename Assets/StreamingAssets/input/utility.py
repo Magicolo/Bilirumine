@@ -66,16 +66,18 @@ def memory(name: str, access: int):
 
 
 def read(memory: mmap.mmap, offset: int, size: int, generation: int) -> Optional[bytes]:
-    global INDEX, CAPACITY, GENERATION, MEMORY_LOCK
+    global NEXT, CAPACITY, GENERATION, MEMORY_LOCK
 
     if size <= 0 or offset + size > CAPACITY:
         return None
 
     with MEMORY_LOCK:
         age = GENERATION - generation
-        if age > 1 or age < 0:
+        if age < 0:
+            GENERATION = generation
+        elif age > 1:
             return None
-        elif age == 1 and INDEX > offset:
+        elif age == 1 and NEXT > offset:
             return None
 
     memory.seek(offset)
@@ -92,20 +94,17 @@ def align(pointer: int) -> int:
 
 
 def write(memory: mmap.mmap, bytes: bytes) -> Tuple[int, int, int]:
-    global INDEX, CAPACITY, GENERATION, ALIGN, MEMORY_LOCK
+    global NEXT, CAPACITY, GENERATION, PAD, MEMORY_LOCK
 
     size = len(bytes)
     if size <= 0:
         return (0, 0, 0)
 
     with MEMORY_LOCK:
-        if INDEX + size + ALIGN > CAPACITY:
-            offset, INDEX = 0, 0
-            GENERATION += 1
-        else:
-            offset = INDEX
-        INDEX = align(INDEX + size)
-        generation = GENERATION
+        add = align(PAD + size)
+        if NEXT + add > CAPACITY:
+            GENERATION, NEXT = GENERATION + 1, 0
+        generation, offset, NEXT = GENERATION, NEXT, NEXT + add
 
     memory.seek(offset)
     return offset, memory.write(bytes), generation
@@ -123,11 +122,12 @@ def update(cancel, pause, resume):
 
 WAIT = 0.1
 ALIGN = 8
+PAD = 1024
 PAUSE = set()
 CANCEL = set()
 GENERATION = 1
 CAPACITY = 2**31 - 1
-INDEX = 0
+NEXT = PAD
 MEMORY_LOCK = threading.Lock()
 INPUT_LOCK = threading.Lock()
 OUTPUT_LOCK = threading.Lock()

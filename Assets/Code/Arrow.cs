@@ -24,6 +24,7 @@ public enum Colors
 [Flags]
 public enum Tags
 {
+    None = 0,
     Frame = 1 << 0,
     Clip = 1 << 1,
     Icon = 1 << 2,
@@ -33,7 +34,7 @@ public enum Tags
     Down = 1 << 6,
     Begin = 1 << 7,
     End = 1 << 8,
-    Move = 1 << 9
+    Move = 1 << 9,
 }
 
 public sealed class Arrow : MonoBehaviour

@@ -1,4 +1,4 @@
-import asyncio, sys, threading, torch, asyncio, mmap, utility, base64
+import asyncio, sys, threading, torch, asyncio, mmap, utility, base64, json
 from typing import Optional
 from queue import SimpleQueue
 
@@ -29,7 +29,7 @@ def load(state: dict, memory: Optional[mmap.mmap] = None):
         data = None
 
     if data is not None:
-        loaded = torch.frombuffer(data, dtype=torch.uint8)
+        loaded = torch.frombuffer(bytearray(data), dtype=torch.uint8)
         loaded = loaded.to(dtype=torch.float32)
         loaded = loaded / 255.0
         loaded = loaded.reshape(1, *state["shape"], 3)
@@ -242,9 +242,21 @@ def write(receive: SimpleQueue):
     with utility.memory("image", mmap.ACCESS_WRITE) as memory, torch.inference_mode():
         for state, _, outputs in utility.work(receive, steps):
             (width, height, count, offset, size, generation) = outputs
-            utility.output(
-                f'{state["version"]},{state["tags"]},{width},{height},{count},{offset},{size},{generation}'
+            response = json.dumps(
+                {
+                    "version": state["version"],
+                    "tags": state["tags"],
+                    "loop": state["loop"],
+                    "description": state["description"],
+                    "width": width,
+                    "height": height,
+                    "count": count,
+                    "offset": offset,
+                    "size": size,
+                    "generation": generation,
+                }
             )
+            utility.output(response)
 
 
 loop = asyncio.new_event_loop()

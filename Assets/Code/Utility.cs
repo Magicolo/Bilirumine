@@ -23,6 +23,7 @@ public static class Utility
     {
         var file = $"bilirumine_{name}";
         var path = $"/dev/shm/{file}";
+        Log(nameof(Memory), $"Creating memory mapped file '{path}'.");
         var memory = MemoryMappedFile.CreateFromFile(path, FileMode.OpenOrCreate, file, int.MaxValue, MemoryMappedFileAccess.ReadWrite);
         Application.quitting += () => { try { memory.Dispose(); } catch { } };
         Application.quitting += () => { try { File.Delete(path); } catch { } };
@@ -33,33 +34,19 @@ public static class Utility
     {
         try
         {
+            Log(nameof(Serial), $"Connecting to serial port '{name}' with baud rate '{rate}'.");
             var port = new SerialPortInput(name, rate, Parity.None, 8, StopBits.One, Handshake.None, false, true);
             Application.quitting += () => { try { port.Disconnect(); } catch { } };
             if (port.Connect()) return port;
         }
-        catch { }
+        catch (Exception exception) { Except(nameof(Serial), exception); }
         return null;
     }
 
-    public static void Set<T>(ref T? source, T target) where T : IDisposable
+    public static Process Process(string name, string command, string arguments)
     {
-        var value = source;
-        source = target;
-        value?.Dispose();
-    }
-
-    public static string Cache()
-    {
-        var path = Path.Join(Application.streamingAssetsPath, "input", ".cache");
-        try { Directory.Delete(path, true); } catch { }
-        Directory.CreateDirectory(path);
-        Application.quitting += () => { try { Directory.Delete(path, true); } catch { } };
-        return path;
-    }
-
-    public static Process Run(string name, string command, string arguments)
-    {
-        var process = Process.Start(new ProcessStartInfo(command, arguments)
+        Log(nameof(Process), $"Starting process '{name}' with '{command} {arguments}'.");
+        var process = System.Diagnostics.Process.Start(new ProcessStartInfo(command, arguments)
         {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -76,8 +63,10 @@ public static class Utility
             {
                 var line = await process.StandardError.ReadLineAsync();
                 if (string.IsNullOrWhiteSpace(line)) continue;
-                Debug.LogWarning($"{name}: {line}");
+                Warn(name, line);
             }
+            if (process.HasExited)
+                Warn(name, $"Process exited with exit code '{process.ExitCode}' at '{process.ExitTime}'.");
         });
         return process;
     }
@@ -93,15 +82,28 @@ public static class Utility
 
     public static Process Docker(string service)
     {
+        static void Kill(string path, string service)
+        {
+            Log(nameof(Docker), $"Killing docker container service '{service}' with file '{path}'.");
+            try
+            {
+                var process = System.Diagnostics.Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill {service}"));
+                process.WaitForExit();
+            }
+            catch (Exception exception) { Except(nameof(Docker), exception); }
+        }
+
         var path = Path.Join(Application.streamingAssetsPath, "docker-compose.yml");
-        var process = Run(service.ToUpper(), "docker", $"compose --file '{path}' run --service-ports --interactive {service}");
-        Application.quitting += () => { try { process.Dispose(); } catch { } };
-        Application.quitting += () => { try { Process.Start(new ProcessStartInfo("docker", $"compose --file '{path}' kill {service}")); } catch { } };
+        Kill(path, service);
+        Log(nameof(Docker), $"Starting docker container service '{service}' with file '{path}'.");
+        var process = Process(service, "docker", $"compose --file '{path}' run --service-ports --interactive --rm {service}");
+        Application.quitting += () => Kill(path, service);
         return process;
     }
 
     public static HttpClient Client(string address)
     {
+        Log(nameof(Client), $"Creating HTTP client with address '{address}'.");
         var client = new HttpClient() { BaseAddress = new(address) };
         Application.quitting += () => { try { client.Dispose(); } catch { } };
         return client;
@@ -193,4 +195,9 @@ public static class Utility
             else yield break;
         }
     }
+
+    public static void Log(string name, string message) => Debug.Log($"[{DateTime.Now}] {name.ToUpperInvariant()}: {message}".Truncate(5000));
+    public static void Warn(string name, string message) => Debug.LogWarning($"[{DateTime.Now}] {name.ToUpperInvariant()}: {message}".Truncate(5000));
+    public static void Error(string name, string message) => Debug.LogError($"[{DateTime.Now}] {name.ToUpperInvariant()}: {message}".Truncate(5000));
+    public static void Except(string name, Exception exception) => Debug.LogException(new Exception($"[{DateTime.Now}] {name.ToUpperInvariant()}: {exception.Message}".Truncate(5000), exception));
 }

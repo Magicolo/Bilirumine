@@ -2,7 +2,6 @@
 
 using System;
 using MonoSerialPort;
-using Debug = UnityEngine.Debug;
 
 public static class Arduino
 {
@@ -21,7 +20,8 @@ public static class Arduino
         }
     }
 
-    public static void Log(string message) => Debug.Log($"ARDUINO: {message}");
-    public static void Warn(string message) => Debug.LogWarning($"ARDUINO: {message}");
-    public static void Error(string message) => Debug.LogError($"ARDUINO: {message}");
+    public static void Log(string message) => Utility.Log(nameof(Arduino), message);
+    public static void Warn(string message) => Utility.Warn(nameof(Arduino), message);
+    public static void Error(string message) => Utility.Error(nameof(Arduino), message);
+    public static void Except(Exception exception) => Utility.Except(nameof(Arduino), exception);
 }

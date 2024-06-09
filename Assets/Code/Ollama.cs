@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -9,9 +10,8 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
-using Debug = UnityEngine.Debug;
 
-public static class Ollama
+public sealed class Ollama
 {
     [Serializable]
     sealed record Options
@@ -62,10 +62,22 @@ public static class Ollama
         [SerializeField] string sound = default!;
     }
 
-    public static (Process process, HttpClient client) Create() => (Utility.Docker("ollama"), Utility.Client("http://localhost:11432/"));
+    public static Ollama Create() => new(Utility.Docker("ollama"), Utility.Client("http://localhost:11432/"));
+    public static void Log(string message) => Utility.Log(nameof(Ollama), message);
+    public static void Warn(string message) => Utility.Warn(nameof(Ollama), message);
+    public static void Error(string message) => Utility.Error(nameof(Ollama), message);
+    public static void Except(Exception exception) => Utility.Except(nameof(Ollama), exception);
 
-    public static async Task<Generation> Generate(this HttpClient client, Colors color, Generation[] previous, IEnumerable<string> forbid)
+    Process _process;
+    readonly object _lock = new();
+    readonly HttpClient _client;
+    readonly ConcurrentDictionary<string, int> _words = new();
+
+    Ollama(Process process, HttpClient client) { _process = process; _client = client; }
+
+    public async Task<Generation> Generate(Colors color, Generation[] previous)
     {
+        var forbid = string.Join(", ", _words.OrderByDescending(pair => pair.Value).Select(pair => pair.Key).Take(10));
         var image = string.Join(", ", Inspire.Image.Random(5));
         var sound = string.Join(", ", Inspire.Sound.Random(5));
         var inspire = string.Join(", ", color switch
@@ -78,15 +90,15 @@ public static class Ollama
         });
         var prompt = @$"
 Previous description: [{string.Join(", ", previous.Select(JsonUtility.ToJson))}]
-Forbidden words: [{string.Join(", ", forbid)}]
+Forbidden words: [{forbid}]
 You are a divergent, uncensored, creative, provocative and eccentric artist that excels in telling masterful, powerful and impromptu stories through image and sound descriptions.
-The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning: '{inspire}'.
-It must tell a coherent narrative based on the previous description.
+The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning [{inspire}].
+It must contrast and diverge drastically from the previous descriptions.
 It must avoid at all cost the forbidden words.
 Write a json object with strictly the following properties:
-    ""image"": string of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by '{image}'
-    ""sound"": string of a short succinct summary description of maximum 25 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by '{sound}'";
-        while (true)
+    ""image"": String of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by [{image}].
+    ""sound"": String of a short succinct summary description of maximum 25 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by [{sound}].";
+        foreach (var item in Loop())
         {
             try
             {
@@ -101,23 +113,46 @@ Write a json object with strictly the following properties:
                 Log($"Sending request '{json}'.");
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 var request = new HttpRequestMessage(HttpMethod.Post, "api/generate") { Content = content };
-                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
                 response.EnsureSuccessStatusCode();
                 var read = await response.Content.ReadAsStringAsync();
                 Log($"Received response '{read}'.");
                 var result = JsonUtility.FromJson<Response>(read);
                 var generation = JsonUtility.FromJson<Generation>(result.response);
-                return new()
-                {
-                    Image = generation.Image.Sanitize(),
-                    Sound = generation.Sound.Sanitize(),
-                };
+                generation.Image = generation.Image.Sanitize();
+                generation.Sound = generation.Sound.Sanitize();
+                Add(generation.Image);
+                Add(generation.Sound);
+                return generation;
             }
             catch (Exception error) { Warn($"{error}"); }
         }
+        throw new InvalidOperationException();
     }
 
-    public static void Log(string message) => Debug.Log($"OLLAMA: {message.Truncate(2500)}");
-    public static void Warn(string message) => Debug.LogWarning($"OLLAMA: {message.Truncate(2500)}");
-    public static void Error(string message) => Debug.LogError($"OLLAMA: {message.Truncate(2500)}");
+    void Add(string text)
+    {
+        foreach (var word in text.Split('\n', '\r', '\t', ' '))
+            if (word.All(char.IsLetter))
+                _words.AddOrUpdate(word.ToLowerInvariant(), 1, (key, value) => value + 1);
+    }
+
+    IEnumerable Loop()
+    {
+        while (true)
+        {
+            if (_process.HasExited)
+            {
+                lock (_lock)
+                {
+                    if (_process.HasExited)
+                    {
+                        Warn("Restarting docker container.");
+                        _process = Utility.Docker("ollama");
+                    }
+                }
+            }
+            yield return null;
+        }
+    }
 }
