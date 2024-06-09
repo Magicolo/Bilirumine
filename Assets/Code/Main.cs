@@ -2,7 +2,6 @@
 
 using UnityEngine;
 using System;
-using System.Collections.Concurrent;
 using System.Collections;
 using System.Threading.Tasks;
 using TMPro;
@@ -12,42 +11,38 @@ using Random = UnityEngine.Random;
 using UnityEngine.Rendering.PostProcessing;
 using System.IO;
 
-/*
-    TODO
-    - Fix the bug with 'sound.py/load': generates aggressive noise
-*/
-sealed class Inputs
-{
-    public bool Left { get => Arrows[1]; set => Arrows[1] = value; }
-    public bool Right { get => Arrows[0]; set => Arrows[0] = value; }
-    public bool Up { get => Arrows[2]; set => Arrows[2] = value; }
-    public bool Down { get => Arrows[3]; set => Arrows[3] = value; }
-    public bool Plus;
-    public bool Minus;
-    public bool Tab;
-    public bool Shift;
-    public bool Space;
-    public readonly bool[] Arrows = new bool[4];
-    public readonly bool[] Buttons = new bool[4];
-}
-
-sealed record Entry
-{
-    public long Date;
-    public string Image = "";
-    public string Sound = "";
-    public Colors Color;
-    public int Width;
-    public int Height;
-    public int Rate;
-    public int Samples;
-    public int Channels;
-    public string Positive = "";
-    public string Prompt = "";
-}
-
 public sealed class Main : MonoBehaviour
 {
+    sealed class Inputs
+    {
+        public bool Left { get => Arrows[1]; set => Arrows[1] = value; }
+        public bool Right { get => Arrows[0]; set => Arrows[0] = value; }
+        public bool Up { get => Arrows[2]; set => Arrows[2] = value; }
+        public bool Down { get => Arrows[3]; set => Arrows[3] = value; }
+        public bool Plus;
+        public bool Minus;
+        public bool Tab;
+        public bool Shift;
+        public bool Space;
+        public readonly bool[] Arrows = new bool[4];
+        public readonly bool[] Buttons = new bool[4];
+    }
+
+    sealed record Entry
+    {
+        public long Date;
+        public string Image = "";
+        public string Sound = "";
+        public Colors Color;
+        public int Width;
+        public int Height;
+        public int Rate;
+        public int Samples;
+        public int Channels;
+        public string Positive = "";
+        public string Prompt = "";
+    }
+
     static readonly string _history = Path.Join(Application.streamingAssetsPath, "history.json");
 
     public RectTransform Canvas = default!;

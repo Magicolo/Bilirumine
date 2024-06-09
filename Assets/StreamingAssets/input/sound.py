@@ -15,7 +15,7 @@ def load(state: dict, memory: Optional[mmap.mmap] = None):
         data = None
 
     if data is not None:
-        loaded = torch.tensor(bytearray(data), dtype=torch.float32)
+        loaded = torch.frombuffer(bytearray(data), dtype=torch.float32)
         loaded = loaded.reshape(1, 1, len(loaded))
         return loaded
 

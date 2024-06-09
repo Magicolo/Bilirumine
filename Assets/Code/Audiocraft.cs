@@ -31,11 +31,11 @@ public sealed class Audiocraft
         public int Generation;
         public float Duration;
         public float Overlap;
-        public string Data = "";
         public string[] Prompts = Array.Empty<string>();
         public int[] Cancel = Array.Empty<int>();
         public int[] Pause = Array.Empty<int>();
         public int[] Resume = Array.Empty<int>();
+        public string Data = "";
 
         public override string ToString() => $@"{{
 ""version"":{Version},
@@ -48,11 +48,11 @@ public sealed class Audiocraft
 ""generation"":{Generation},
 ""duration"":{Duration},
 ""overlap"":{Overlap},
-""data"":""{Data}"",
 ""prompts"":[{string.Join(",", Prompts.Select(prompt => $@"""{prompt.Escape()}"""))}],
 ""cancel"":[{string.Join(",", Cancel)}],
 ""pause"":[{string.Join(",", Pause)}],
-""resume"":[{string.Join(",", Resume)}]
+""resume"":[{string.Join(",", Resume)}],
+""data"":""{Data}"",
 }}".Replace("\n", "").Replace("\r", "");
     }
 

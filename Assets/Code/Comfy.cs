@@ -57,11 +57,11 @@ public sealed class Comfy
         public int[] Pause = Array.Empty<int>();
         public int[] Resume = Array.Empty<int>();
         public string Load = "";
-        public string Data = "";
         public bool Empty;
         public string Positive = "";
         public string Negative = "";
         public string Description = "";
+        public string Data = "";
         public Request? Next;
         public Request Last => Next is { } next ? next.Last : this;
 
@@ -91,9 +91,9 @@ public sealed class Comfy
 ""empty"":{(Empty ? "True" : "False")},
 ""positive"":""{Positive.Escape()}"",
 ""negative"":""{Negative.Escape()}"",
-""data"":""{Data}"",
 ""load"":""{Load}"",
-""next"":{Next?.ToString() ?? "None"}
+""data"":""{Data}"",
+""next"":{Next?.ToString() ?? "None"},
 }}".Replace("\n", "").Replace("\r", "");
     }
 
