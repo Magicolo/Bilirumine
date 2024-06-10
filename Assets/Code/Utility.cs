@@ -20,6 +20,7 @@ public static class Utility
 
     public static Memory Memory(string name)
     {
+        Log(nameof(Memory), $"Creating memory '{name}'.");
         var memory = new Memory(name);
         Application.quitting += () => { try { memory.Dispose(); } catch { } };
         return memory;
