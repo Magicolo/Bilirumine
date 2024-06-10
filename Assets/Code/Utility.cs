@@ -74,8 +74,8 @@ public static class Utility
     public static async Task<byte[]> Read(this MemoryMappedFile memory, int offset, int size)
     {
         using var stream = memory.CreateViewStream();
-        stream.Seek(offset, SeekOrigin.Begin);
         var bytes = Pool<byte>.Take(size);
+        stream.Seek(offset, SeekOrigin.Begin);
         await stream.ReadAsync(bytes);
         return bytes;
     }
@@ -109,14 +109,14 @@ public static class Utility
         return client;
     }
 
-    public static Color Color(this Colors color) => color switch
+    public static Color Color(this Colors color, float gray = 0f) => UnityEngine.Color.Lerp(color switch
     {
         Colors.Green => UnityEngine.Color.green,
         Colors.White => UnityEngine.Color.white,
         Colors.Red => UnityEngine.Color.red,
         Colors.Yellow => UnityEngine.Color.yellow,
         _ => throw new InvalidOperationException(),
-    };
+    }, UnityEngine.Color.gray, gray);
 
     public static void Or(bool[] left, bool[] right, bool[] result)
     {

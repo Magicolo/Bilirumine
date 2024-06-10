@@ -101,16 +101,15 @@ def read(memory: mmap.mmap, offset: int, size: int, generation: int) -> Optional
                 return None
 
             try:
-                memory.seek(offset)
-                return memory.read(size)
+                return memory[offset : offset + size]
             except Exception as exception:
                 error(f"Failed to read memory at '{offset} : {size}': {exception}")
 
 
-def write(memory: mmap.mmap, bytes: bytes) -> Tuple[int, int, int]:
+def write(memory: mmap.mmap, data: bytes) -> Tuple[int, int, int]:
     global NEXT, CAPACITY, GENERATION, PAD, MEMORY_LOCK
 
-    size = len(bytes)
+    size = len(data)
     if size <= 0:
         return (0, 0, 0)
 
@@ -122,8 +121,8 @@ def write(memory: mmap.mmap, bytes: bytes) -> Tuple[int, int, int]:
             generation, offset, NEXT = GENERATION, NEXT, NEXT + add
 
             try:
-                memory.seek(offset)
-                return offset, memory.write(bytes), generation
+                memory[offset : offset + size] = data
+                return offset, size, generation
             except Exception as exception:
                 error(f"Failed to write memory at '{offset} : {size}': {exception}")
     return (0, 0, 0)

@@ -133,24 +133,6 @@ public sealed class Audiocraft
         return audio.SetData(MemoryMarshal.Cast<byte, float>(data), 0);
     }
 
-    public static void Load(Clip clip, MemoryMappedFile memory, ref AudioClip? audio)
-    {
-        if (clip.Data.Length > 0)
-            Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
-        else
-            Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, memory, ref audio);
-        Pool<byte>.Put(ref clip.Data);
-    }
-
-    public static void Load(Icon icon, MemoryMappedFile memory, ref AudioClip? audio)
-    {
-        if (icon.Data.Length > 0)
-            Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
-        else
-            Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, memory, ref audio);
-        Pool<byte>.Put(ref icon.Data);
-    }
-
     public static void Log(string message) => Utility.Log(nameof(Audiocraft), message);
     public static void Warn(string message) => Utility.Warn(nameof(Audiocraft), message);
     public static void Error(string message) => Utility.Error(nameof(Audiocraft), message);
@@ -194,7 +176,7 @@ public sealed class Audiocraft
             {
                 if (_cancel.Contains(clip.Version)) continue;
 
-                Load(clip, _memory, ref load);
+                Load(clip, ref load);
                 @in.clip = load;
                 @in.volume = 0f;
                 (main, load) = (load, main);
@@ -224,7 +206,7 @@ public sealed class Audiocraft
                     if (icon.Tags.HasFlag(arrow.Tags))
                     {
                         var audio = arrow.Audio;
-                        Load(icon, _memory, ref audio);
+                        Load(icon, ref audio);
                         arrow.Audio = audio;
                         arrow.Sound.clip = arrow.Audio;
                         arrow.Icons.sound = icon;
@@ -369,6 +351,24 @@ public sealed class Audiocraft
             }
             catch (Exception exception) { Except(exception); }
         }
+    }
+
+    void Load(Clip clip, ref AudioClip? audio)
+    {
+        if (clip.Data.Length > 0)
+            Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
+        else
+            Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, _memory, ref audio);
+        Pool<byte>.Put(ref clip.Data);
+    }
+
+    void Load(Icon icon, ref AudioClip? audio)
+    {
+        if (icon.Data.Length > 0)
+            Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
+        else
+            Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, _memory, ref audio);
+        Pool<byte>.Put(ref icon.Data);
     }
 
     IEnumerable Loop()

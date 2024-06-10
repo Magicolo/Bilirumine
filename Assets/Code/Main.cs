@@ -165,7 +165,7 @@ Clips: {audiocraft.Clips:0000}
                         Shine.volume = Mathf.Lerp(Shine.volume, time / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
                         bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 50f, Time.deltaTime / speed / speed);
-                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color() * 50f, Time.deltaTime / speed / speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color(0.1f) * 50f, Time.deltaTime / speed / speed);
                         break;
                     // End choice.
                     case ({ Chosen: true, Icons: ({ } image, { } sound) } chosen, var moving) when chosen == moving:
@@ -177,7 +177,7 @@ Clips: {audiocraft.Clips:0000}
                             Rumble.Stop();
                             Move.Play();
                             bloom.intensity.value = 100f;
-                            bloom.color.value = chosen.Color.Color() * 100f;
+                            bloom.color.value = chosen.Color.Color(0.1f) * 100f;
                             comfy.Set(play: true);
                             comfy.WriteEnd();
                             audiocraft.Set(motion: -1f);

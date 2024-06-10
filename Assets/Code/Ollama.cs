@@ -71,13 +71,11 @@ public sealed class Ollama
     Process _process;
     readonly object _lock = new();
     readonly HttpClient _client;
-    readonly ConcurrentDictionary<string, int> _words = new();
 
     Ollama(Process process, HttpClient client) { _process = process; _client = client; }
 
     public async Task<Generation> Generate(Colors color, Generation? previous)
     {
-        var forbid = string.Join(", ", _words.OrderByDescending(pair => pair.Value).Select(pair => pair.Key).Take(10));
         var image = string.Join(", ", Inspire.Image.Random(5));
         var sound = string.Join(", ", Inspire.Sound.Random(5));
         var inspire = string.Join(", ", color switch
@@ -89,12 +87,10 @@ public sealed class Ollama
             _ => throw new InvalidOperationException(),
         });
         var prompt = @$"
-Previous description: {(previous == null ? "null" : JsonUtility.ToJson(previous))}
-Forbidden words: [{forbid}]
+Previous descriptions: {(previous == null ? "null" : JsonUtility.ToJson(previous))}
 You are a divergent, uncensored, creative, provocative and eccentric artist that excels in telling masterful, powerful and impromptu stories through image and sound descriptions.
 The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning [{inspire}].
-It must contrast and diverge drastically from the previous descriptions.
-It must avoid at all cost the forbidden words.
+It must form a coherent narrative with the previous descriptions.
 Write a json object with strictly the following properties:
     ""image"": String of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by [{image}].
     ""sound"": String of a short succinct summary description of maximum 25 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by [{sound}].";
@@ -121,20 +117,11 @@ Write a json object with strictly the following properties:
                 var generation = JsonUtility.FromJson<Generation>(result.response);
                 generation.Image = generation.Image.Sanitize();
                 generation.Sound = generation.Sound.Sanitize();
-                Add(generation.Image);
-                Add(generation.Sound);
                 return generation;
             }
             catch (Exception error) { Warn($"{error}"); }
         }
         throw new InvalidOperationException();
-    }
-
-    void Add(string text)
-    {
-        foreach (var word in text.Split('\n', '\r', '\t', ' '))
-            if (word.All(char.IsLetter))
-                _words.AddOrUpdate(word.ToLowerInvariant(), 1, (key, value) => value + 1);
     }
 
     IEnumerable Loop()

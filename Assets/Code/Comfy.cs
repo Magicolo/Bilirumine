@@ -187,34 +187,14 @@ public sealed class Comfy
     {
         Load(width, height, offset, memory, ref texture);
         var area = new Rect(0f, 0f, width, height);
-        var sprite = Sprite.Create(texture, area, area.center);
-        image.sprite = sprite;
+        image.sprite = Sprite.Create(texture, area, area.center);
     }
 
     public static void Load(int width, int height, byte[] data, Image image, ref Texture2D? texture)
     {
         Load(width, height, data, ref texture);
         var area = new Rect(0f, 0f, width, height);
-        var sprite = Sprite.Create(texture, area, area.center);
-        image.sprite = sprite;
-    }
-
-    public static void Load(Icon icon, MemoryMappedFile memory, Image image, ref Texture2D? texture)
-    {
-        if (icon.Data.Length > 0)
-            Load(icon.Width, icon.Height, icon.Data, image, ref texture);
-        else
-            Load(icon.Width, icon.Height, icon.Offset, memory, image, ref texture);
-        Pool<byte>.Put(ref icon.Data);
-    }
-
-    public static void Load(Frame frame, MemoryMappedFile memory, Image image, ref Texture2D? texture)
-    {
-        if (frame.Data.Length > 0)
-            Load(frame.Width, frame.Height, frame.Data, ref texture);
-        else
-            Load(frame.Width, frame.Height, frame.Offset, memory, image, ref texture);
-        Pool<byte>.Put(ref frame.Data);
+        image.sprite = Sprite.Create(texture, area, area.center);
     }
 
     public static void Log(string message) => Utility.Log(nameof(Comfy), message);
@@ -271,7 +251,7 @@ public sealed class Comfy
 
                 while (Time.time - time < _delta.wait / _delta.speed) yield return null;
                 time += _delta.wait / _delta.speed;
-                Load(frame, _memory, image, ref load);
+                Load(frame, image, ref load);
                 (main, load) = (load, main);
                 _resolution = (frame.Width, frame.Height);
             }
@@ -291,7 +271,7 @@ public sealed class Comfy
                     if (icon.Tags.HasFlag(arrow.Tags))
                     {
                         var texture = arrow.Texture;
-                        Load(icon.Width, icon.Height, icon.Offset, _memory, arrow.Image, ref texture);
+                        Load(icon, arrow.Image, ref texture);
                         arrow.Texture = texture;
                         arrow.Icons.image = icon;
                     }
@@ -491,6 +471,24 @@ public sealed class Comfy
             }
             catch (Exception exception) { Except(exception); }
         }
+    }
+
+    void Load(Icon icon, Image image, ref Texture2D? texture)
+    {
+        if (icon.Data.Length > 0)
+            Load(icon.Width, icon.Height, icon.Data, image, ref texture);
+        else
+            Load(icon.Width, icon.Height, icon.Offset, _memory, image, ref texture);
+        Pool<byte>.Put(ref icon.Data);
+    }
+
+    void Load(Frame frame, Image image, ref Texture2D? texture)
+    {
+        if (frame.Data.Length > 0)
+            Load(frame.Width, frame.Height, frame.Data, image, ref texture);
+        else
+            Load(frame.Width, frame.Height, frame.Offset, _memory, image, ref texture);
+        Pool<byte>.Put(ref frame.Data);
     }
 
     IEnumerable Loop()
