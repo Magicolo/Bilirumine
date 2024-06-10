@@ -6,21 +6,6 @@ using MonoSerialPort;
 
 public sealed class Arduino
 {
-    public static Arduino Create()
-    {
-        try
-        {
-            var ports = SerialPortInput.GetPorts();
-            Log($"Ports: {string.Join(", ", ports)}");
-            return new(Utility.Serial(ports[0], 9600));
-        }
-        catch (Exception exception)
-        {
-            Warn($"{exception}");
-            return new(null);
-        }
-    }
-
     public static void Log(string message) => Utility.Log(nameof(Arduino), message);
     public static void Warn(string message) => Utility.Warn(nameof(Arduino), message);
     public static void Error(string message) => Utility.Error(nameof(Arduino), message);
@@ -28,7 +13,16 @@ public sealed class Arduino
 
     readonly SerialPortInput? _serial;
 
-    Arduino(SerialPortInput? serial) => _serial = serial;
+    public Arduino()
+    {
+        try
+        {
+            var ports = SerialPortInput.GetPorts();
+            Log($"Ports: {string.Join(", ", ports)}");
+            _serial = Utility.Serial(ports[0], 9600);
+        }
+        catch (Exception exception) { Warn($"{exception}"); }
+    }
 
     public async Task Read(bool[] inputs)
     {

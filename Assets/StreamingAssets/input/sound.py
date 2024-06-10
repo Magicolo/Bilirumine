@@ -1,14 +1,14 @@
-import sys, threading, mmap, utility, torch, base64, json
-from typing import Optional
+import sys, threading, utility, torch, base64, json
+from utility import Memory
 from queue import SimpleQueue
 
 sys.path.append("/audiocraft")
 from audiocraft.models import MusicGen
 
 
-def load(state: dict, memory: Optional[mmap.mmap] = None):
-    if memory and state["size"] and state["generation"]:
-        data = utility.read(memory, state["offset"], state["size"], state["generation"])
+def load(state: dict):
+    if state["size"] and state["generation"]:
+        data = MEMORY.read(state["offset"], state["size"], state["generation"])
     elif state["data"]:
         data = base64.b64decode(state["data"])
     else:
@@ -21,14 +21,13 @@ def load(state: dict, memory: Optional[mmap.mmap] = None):
 
 
 def read(send: SimpleQueue):
-    with utility.memory("sound", mmap.ACCESS_READ) as memory:
-        while True:
-            state = utility.input()
-            utility.update(state["cancel"], state["pause"], state["resume"])
-            loaded = load(state, memory)
-            if loaded is None and not state["empty"]:
-                continue
-            send.put((state, loaded), block=False)
+    while True:
+        state = utility.input()
+        utility.update(state["cancel"], state["pause"], state["resume"])
+        loaded = load(state)
+        if loaded is None and not state["empty"]:
+            continue
+        send.put((state, loaded), block=False)
 
 
 def process(receive: SimpleQueue, send: SimpleQueue):
@@ -53,39 +52,40 @@ def process(receive: SimpleQueue, send: SimpleQueue):
 
 
 def write(receive: SimpleQueue):
+
     def steps(_, clips):
         yield None
         [count, channels, samples] = clips.shape
         data = clips.cpu().numpy().tobytes()
         yield None
-        offset, size, generation = utility.write(memory, data)
+        offset, size, generation = MEMORY.write(data)
         yield None
         torch.cuda.empty_cache()
         yield (samples, channels, count, offset, size, generation)
 
-    with utility.memory("sound", mmap.ACCESS_WRITE) as memory:
-        for state, _, outputs in utility.work(receive, steps):
-            (samples, channels, count, offset, size, generation) = outputs
-            response = json.dumps(
-                {
-                    "version": state["version"],
-                    "tags": state["tags"],
-                    "loop": state["loop"],
-                    "description": state["description"],
-                    "overlap": state["overlap"],
-                    "rate": RATE,
-                    "samples": samples,
-                    "channels": channels,
-                    "count": count,
-                    "offset": offset,
-                    "size": size,
-                    "generation": generation,
-                }
-            )
-            utility.output(response)
+    for state, _, outputs in utility.work(receive, steps):
+        (samples, channels, count, offset, size, generation) = outputs
+        response = json.dumps(
+            {
+                "version": state["version"],
+                "tags": state["tags"],
+                "loop": state["loop"],
+                "description": state["description"],
+                "overlap": state["overlap"],
+                "rate": RATE,
+                "samples": samples,
+                "channels": channels,
+                "count": count,
+                "offset": offset,
+                "size": size,
+                "generation": generation,
+            }
+        )
+        utility.output(response)
 
 
 RATE = 32000
+MEMORY = Memory("sound")
 a = SimpleQueue()
 b = SimpleQueue()
 threads = [

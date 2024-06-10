@@ -5,7 +5,6 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -107,22 +106,12 @@ public sealed class Audiocraft
         public float Duration => (float)Samples / Rate;
     }
 
-    public static Audiocraft Create() => new(Utility.Docker("audiocraft"), Utility.Memory("sound"));
-
-    public unsafe static void Load(int rate, int samples, int channels, int offset, MemoryMappedFile memory, ref AudioClip? audio)
+    public unsafe static bool Load(int rate, int samples, int channels, int offset, int size, Memory memory, ref AudioClip? audio)
     {
         if (audio == null || audio.samples != samples || audio.channels != channels)
             audio = AudioClip.Create("", samples, channels, rate, false);
 
-        using var access = memory.CreateViewAccessor();
-        try
-        {
-            var pointer = (byte*)IntPtr.Zero;
-            access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
-            if (pointer == null) throw new NullReferenceException();
-            audio.SetData(new ReadOnlySpan<float>(pointer + offset, samples * channels), 0);
-        }
-        finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
+        return memory.Load(offset, size, audio);
     }
 
     public static bool Load(int rate, int samples, int channels, byte[] data, ref AudioClip? audio)
@@ -138,12 +127,12 @@ public sealed class Audiocraft
     public static void Error(string message) => Utility.Error(nameof(Audiocraft), message);
     public static void Except(Exception exception) => Utility.Except(nameof(Audiocraft), exception);
 
-    Process _process;
+    Process _process = Utility.Docker("audiocraft");
     float _volume = 1f;
     float _motion = 1f;
     float _pitch = 1f;
     bool _pause;
-    readonly MemoryMappedFile _memory;
+    readonly Memory _memory = Utility.Memory("sound");
     readonly ConcurrentQueue<Clip> _clips = new();
     readonly ConcurrentQueue<Icon> _icons = new();
     readonly ConcurrentDictionary<(Tags tags, bool loop), Request> _requests = new();
@@ -152,12 +141,6 @@ public sealed class Audiocraft
 
     public int Clips => _clips.Count;
     float Volume => Mathf.Clamp01(_volume * _motion);
-
-    Audiocraft(Process process, MemoryMappedFile memory)
-    {
-        _process = process;
-        _memory = memory;
-    }
 
     public void Set(float? volume = null, float? motion = null, float? pitch = null, float time = 1f)
     {
@@ -311,7 +294,7 @@ public sealed class Audiocraft
                         {
                             Index = i,
                             Offset = offset,
-                            Data = await _memory.Read(offset, size),
+                            // Data = await _memory.Read(offset, size),
                         });
                 }
                 if (tags.HasFlag(Tags.Icon))
@@ -327,7 +310,7 @@ public sealed class Audiocraft
                         Channels = response.channels,
                         Generation = response.generation,
                         Description = response.description,
-                        Data = await _memory.Read(offset, size),
+                        // Data = await _memory.Read(offset, size),
                     });
                 }
             }
@@ -358,7 +341,7 @@ public sealed class Audiocraft
         if (clip.Data.Length > 0)
             Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
         else
-            Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, _memory, ref audio);
+            Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, clip.Size, _memory, ref audio);
         Pool<byte>.Put(ref clip.Data);
     }
 
@@ -367,7 +350,7 @@ public sealed class Audiocraft
         if (icon.Data.Length > 0)
             Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
         else
-            Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, _memory, ref audio);
+            Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, icon.Size, _memory, ref audio);
         Pool<byte>.Put(ref icon.Data);
     }
 

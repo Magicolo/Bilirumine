@@ -1,5 +1,5 @@
-import asyncio, sys, threading, torch, asyncio, mmap, utility, base64, json
-from typing import Optional
+import asyncio, sys, threading, torch, asyncio, utility, base64, json
+from utility import Memory
 from queue import SimpleQueue
 
 sys.path.append("/comfy")
@@ -20,9 +20,9 @@ from nodes import (
 )
 
 
-def load(state: dict, memory: Optional[mmap.mmap] = None):
-    if memory and state["size"] and state["generation"]:
-        data = utility.read(memory, state["offset"], state["size"], state["generation"])
+def load(state: dict):
+    if state["size"] and state["generation"]:
+        data = MEMORY.read(state["offset"], state["size"], state["generation"])
     elif state["data"]:
         data = base64.b64decode(state["data"])
     else:
@@ -44,14 +44,14 @@ def load(state: dict, memory: Optional[mmap.mmap] = None):
 
 
 def read(send: SimpleQueue):
-    with utility.memory("image", mmap.ACCESS_READ) as memory, torch.inference_mode():
+    with torch.inference_mode():
         (model, clip, vae) = CheckpointLoaderSimple().load_checkpoint(
             "dreamshaperXL_v21TurboDPMSDE.safetensors"
         )
         while True:
             state = {**utility.input(), "model": model, "clip": clip, "vae": vae}
             utility.update(state["cancel"], state["pause"], state["resume"])
-            loaded = load(state, memory)
+            loaded = load(state)
             if loaded is None:
                 continue
             send.put((state, loaded), block=False)
@@ -180,9 +180,7 @@ def detail(
                 end.put((state, decoded), block=False)
 
             if state["next"]:
-                next = {**state, **state["next"]}
-                loaded = load(next)
-                loop.put((next, decoded if loaded is None else loaded), block=False)
+                loop.put(({**state, **state["next"]}, decoded), block=False)
             elif state["loop"]:
                 loop.put((state, decoded), block=False)
 
@@ -234,12 +232,12 @@ def write(receive: SimpleQueue):
         yield None
         data = images.tobytes()
         yield None
-        offset, size, generation = utility.write(memory, data)
+        offset, size, generation = MEMORY.write(data)
         yield None
         torch.cuda.empty_cache()
         yield (width, height, count, offset, size, generation)
 
-    with utility.memory("image", mmap.ACCESS_WRITE) as memory, torch.inference_mode():
+    with torch.inference_mode():
         for state, _, outputs in utility.work(receive, steps):
             (width, height, count, offset, size, generation) = outputs
             response = json.dumps(
@@ -259,6 +257,7 @@ def write(receive: SimpleQueue):
             utility.output(response)
 
 
+MEMORY = Memory("image")
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 instance = server.PromptServer(loop)

@@ -4,7 +4,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.MemoryMappedFiles;
 using System.Net.Http;
 using System.Threading.Tasks;
 using MonoSerialPort;
@@ -19,14 +18,10 @@ public static class Utility
     public static string Escape(this string value) => value.Replace(@"""", @"\""");
     public static string Sanitize(this string value) => value.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ').Replace('"', '\'').Replace('{', '<').Replace('}', '>').Replace('[', '<').Replace(']', '>').Replace('(', '<').Replace(')', '>');
 
-    public static MemoryMappedFile Memory(string name)
+    public static Memory Memory(string name)
     {
-        var file = $"bilirumine_{name}";
-        var path = $"/dev/shm/{file}";
-        Log(nameof(Memory), $"Creating memory mapped file '{path}'.");
-        var memory = MemoryMappedFile.CreateFromFile(path, FileMode.OpenOrCreate, file, int.MaxValue, MemoryMappedFileAccess.ReadWrite);
+        var memory = new Memory(name);
         Application.quitting += () => { try { memory.Dispose(); } catch { } };
-        Application.quitting += () => { try { File.Delete(path); } catch { } };
         return memory;
     }
 
@@ -69,15 +64,6 @@ public static class Utility
                 Warn(name, $"Process exited with exit code '{process.ExitCode}' at '{process.ExitTime}'.");
         });
         return process;
-    }
-
-    public static async Task<byte[]> Read(this MemoryMappedFile memory, int offset, int size)
-    {
-        using var stream = memory.CreateViewStream();
-        var bytes = Pool<byte>.Take(size);
-        stream.Seek(offset, SeekOrigin.Begin);
-        await stream.ReadAsync(bytes);
-        return bytes;
     }
 
     public static Process Docker(string service)

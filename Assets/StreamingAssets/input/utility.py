@@ -1,6 +1,68 @@
-import sys, threading, ast, random, mmap
+import sys, threading, ast, random, mmap, os, time
 from queue import SimpleQueue, Empty
 from typing import Optional, Tuple
+
+
+class Memory:
+
+    def __init__(self, name: str, align: int = 8, capacity: int = 2**31 - 1):
+        self.capacity = capacity
+        self.lock = f"/tmp/bilirumine_{name}.lock"
+        self.next = 0
+        self.align = align
+        self.generation = 1
+        with open(f"/dev/shm/bilirumine_{name}", "r+b") as file:
+            self.memory = mmap.mmap(file.fileno(), capacity, access=mmap.ACCESS_WRITE)
+
+    def read(self, offset: int, size: int, generation: int) -> Optional[bytes]:
+        if size <= 0 or offset < 0 or offset + size > self.capacity:
+            return None
+
+        self._acquire()
+        try:
+            age = self.generation - generation
+            if age < 0:
+                self.generation = generation
+            elif age > 1:
+                return None
+            elif age == 1 and self.next > offset:
+                return None
+            return self.memory[offset : offset + size]
+        except Exception as exception:
+            error(f"Failed to read memory at '{offset} : {size}': {exception}")
+        finally:
+            self._release()
+
+    def write(self, data: bytes) -> Tuple[int, int, int]:
+        size = len(data)
+        if size <= 0:
+            return (0, 0, 0)
+
+        self._acquire()
+        try:
+            if self.next + size > self.capacity:
+                self.generation, self.next = self.generation + 1, 0
+            generation, offset = self.generation, self.next
+            self.next = align(self.next + size, self.align)
+            self.memory[offset : offset + size] = data
+            return offset, size, generation
+        except Exception as exception:
+            error(f"Failed to write memory at '{offset} : {size}': {exception}")
+            return (0, 0, 0)
+        finally:
+            self._release()
+
+    def _acquire(self) -> None:
+        while True:
+            try:
+                os.open(self.lock, os.O_CREAT | os.O_EXCL)
+                break
+            except FileExistsError:
+                time.sleep(0.001)
+
+    def _release(self) -> None:
+        os.remove(self.lock)
+        pass
 
 
 def seed():
@@ -12,23 +74,30 @@ def nudge(value, by):
 
 
 def input():
-    with INPUT_LOCK:
+    with INPUT:
         line = sys.stdin.readline()
     return ast.literal_eval(line)
 
 
 def output(message):
     line = f"{message}\n"
-    with OUTPUT_LOCK:
+    with OUTPUT:
         sys.stdout.write(line)
         sys.stdout.flush()
 
 
 def error(message):
     line = f"{message}\n"
-    with ERROR_LOCK:
+    with ERROR:
         sys.stderr.write(line)
         sys.stderr.flush()
+
+
+def align(pointer: int, align: int) -> int:
+    if pointer % align == 0:
+        return pointer
+    else:
+        return pointer + align - pointer % align
 
 
 def work(receive: SimpleQueue, steps):
@@ -68,74 +137,9 @@ def update(cancel, pause, resume):
     if cancel or resume:
         PAUSE = PAUSE.difference(cancel + resume)
 
-
-def align(pointer: int) -> int:
-    global ALIGN
-    remain = pointer % ALIGN
-    if remain == 0:
-        return pointer
-    else:
-        return pointer + ALIGN - remain
-
-
-def memory(name: str, access: int):
-    global CAPACITY
-    with open(f"/dev/shm/bilirumine_{name}", "r+b") as file:
-        return mmap.mmap(file.fileno(), CAPACITY, access=access)
-
-
-def read(memory: mmap.mmap, offset: int, size: int, generation: int) -> Optional[bytes]:
-    global NEXT, CAPACITY, GENERATION, MEMORY_LOCK
-
-    if size <= 0 or offset < 0 or offset + size > CAPACITY:
-        return None
-
-    for _ in range(5):
-        with MEMORY_LOCK:
-            age = GENERATION - generation
-            if age < 0:
-                GENERATION = generation
-            elif age > 1:
-                return None
-            elif age == 1 and NEXT > offset:
-                return None
-
-            try:
-                return memory[offset : offset + size]
-            except Exception as exception:
-                error(f"Failed to read memory at '{offset} : {size}': {exception}")
-
-
-def write(memory: mmap.mmap, data: bytes) -> Tuple[int, int, int]:
-    global NEXT, CAPACITY, GENERATION, PAD, MEMORY_LOCK
-
-    size = len(data)
-    if size <= 0:
-        return (0, 0, 0)
-
-    for _ in range(5):
-        with MEMORY_LOCK:
-            add = align(PAD + size)
-            if NEXT + add > CAPACITY:
-                GENERATION, NEXT = GENERATION + 1, 0
-            generation, offset, NEXT = GENERATION, NEXT, NEXT + add
-
-            try:
-                memory[offset : offset + size] = data
-                return offset, size, generation
-            except Exception as exception:
-                error(f"Failed to write memory at '{offset} : {size}': {exception}")
-    return (0, 0, 0)
-
 WAIT = 0.1
-ALIGN = 8
-PAD = 1024
 PAUSE = set()
 CANCEL = set()
-GENERATION = 1
-CAPACITY = 2**31 - 1
-NEXT = PAD
-MEMORY_LOCK = threading.Lock()
-INPUT_LOCK = threading.Lock()
-OUTPUT_LOCK = threading.Lock()
-ERROR_LOCK = threading.Lock()
+INPUT = threading.Lock()
+OUTPUT = threading.Lock()
+ERROR = threading.Lock()

@@ -66,10 +66,10 @@ public sealed class Main : MonoBehaviour
 
     IEnumerator Start()
     {
-        var arduino = Arduino.Create();
-        var comfy = Comfy.Create();
-        var audiocraft = Audiocraft.Create();
-        var ollama = Ollama.Create();
+        var arduino = new Arduino();
+        var comfy = new Comfy();
+        var audiocraft = new Audiocraft();
+        var ollama = new Ollama();
         yield return new WaitForSeconds(5f);
 
         var arrows = new[] { Left, Right, Up, Down };
@@ -164,8 +164,8 @@ Clips: {audiocraft.Clips:0000}
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.25f, Time.deltaTime * speed);
                         Shine.volume = Mathf.Lerp(Shine.volume, time / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 50f, Time.deltaTime / speed / speed);
-                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color(0.1f) * 50f, Time.deltaTime / speed / speed);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 25f, Time.deltaTime / speed / speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color(0.1f) * 25f, Time.deltaTime / speed / speed);
                         break;
                     // End choice.
                     case ({ Chosen: true, Icons: ({ } image, { } sound) } chosen, var moving) when chosen == moving:
@@ -176,8 +176,8 @@ Clips: {audiocraft.Clips:0000}
                             Shatter.Play();
                             Rumble.Stop();
                             Move.Play();
-                            bloom.intensity.value = 100f;
-                            bloom.color.value = chosen.Color.Color(0.1f) * 100f;
+                            bloom.intensity.value = 25f;
+                            bloom.color.value = chosen.Color.Color(0.1f) * 25f;
                             comfy.Set(play: true);
                             comfy.WriteEnd();
                             audiocraft.Set(motion: -1f);

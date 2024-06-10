@@ -62,17 +62,14 @@ public sealed class Ollama
         [SerializeField] string sound = default!;
     }
 
-    public static Ollama Create() => new(Utility.Docker("ollama"), Utility.Client("http://localhost:11432/"));
     public static void Log(string message) => Utility.Log(nameof(Ollama), message);
     public static void Warn(string message) => Utility.Warn(nameof(Ollama), message);
     public static void Error(string message) => Utility.Error(nameof(Ollama), message);
     public static void Except(Exception exception) => Utility.Except(nameof(Ollama), exception);
 
-    Process _process;
+    Process _process = Utility.Docker("ollama");
     readonly object _lock = new();
-    readonly HttpClient _client;
-
-    Ollama(Process process, HttpClient client) { _process = process; _client = client; }
+    readonly HttpClient _client = Utility.Client("http://localhost:11432/");
 
     public async Task<Generation> Generate(Colors color, Generation? previous)
     {

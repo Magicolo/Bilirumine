@@ -5,7 +5,6 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,19 +20,16 @@ public sealed class Comfy
 
         public static int Reserve() => Interlocked.Increment(ref _version);
 
-        public static Request? Sequence(IEnumerable<Request> requests)
+        public static Request Sequence(Request request, params Request[] requests)
         {
-            var first = default(Request);
-            var previous = default(Request);
-            foreach (var current in requests)
+            var current = request;
+            foreach (var next in requests)
             {
-                if (first is null || previous is null) (first, previous) = (current, current);
-                else { previous.Next = current; previous = current; }
+                current.Next = next;
+                current = next;
             }
-            return first;
+            return request;
         }
-        public static Request? Sequence(params Request[] requests) => Sequence(requests.AsEnumerable());
-        public static Request Sequence(Request request, params Request[] requests) => Sequence(requests.AsEnumerable().Prepend(request))!;
 
         public int Version;
         public bool Loop;
@@ -155,22 +151,12 @@ public sealed class Comfy
         Full = true,
     };
 
-    public static Comfy Create() => new(Utility.Docker("comfy"), Utility.Memory("image"));
-
-    public unsafe static void Load(int width, int height, int offset, MemoryMappedFile memory, ref Texture2D? texture)
+    public unsafe static void Load(int width, int height, int offset, int size, Memory memory, ref Texture2D? texture)
     {
         if (texture == null || texture.width != width || texture.height != height)
             texture = new Texture2D(width, height, TextureFormat.RGB24, 1, true, true);
 
-        using var access = memory.CreateViewAccessor();
-        try
-        {
-            var pointer = (byte*)IntPtr.Zero;
-            access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
-            if (pointer == null) throw new NullReferenceException();
-            texture.LoadRawTextureData((IntPtr)(pointer + offset), width * height * 3);
-        }
-        finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
+        memory.Load(offset, size, texture);
         texture.Apply();
     }
 
@@ -183,9 +169,9 @@ public sealed class Comfy
         texture.Apply();
     }
 
-    public static void Load(int width, int height, int offset, MemoryMappedFile memory, Image image, ref Texture2D? texture)
+    public static void Load(int width, int height, int offset, int size, Memory memory, Image image, ref Texture2D? texture)
     {
-        Load(width, height, offset, memory, ref texture);
+        Load(width, height, offset, size, memory, ref texture);
         var area = new Rect(0f, 0f, width, height);
         image.sprite = Sprite.Create(texture, area, area.center);
     }
@@ -202,7 +188,6 @@ public sealed class Comfy
     public static void Error(string message) => Utility.Error(nameof(Comfy), message);
     public static void Except(Exception exception) => Utility.Except(nameof(Comfy), exception);
 
-
     public float Images => 1f / _delta.image;
     public float Batches => 1f / _delta.batch;
     public int Frames => _frames.Count;
@@ -211,7 +196,7 @@ public sealed class Comfy
     public float Speed => _delta.speed;
     public (float width, float height) Resolution => _resolution;
 
-    Process _process;
+    Process _process = Utility.Docker("comfy");
     int _begin;
     int _end;
     bool _play;
@@ -221,18 +206,12 @@ public sealed class Comfy
     readonly (ConcurrentQueue<TimeSpan> images, ConcurrentQueue<TimeSpan> batches) _deltas = (
         new(Enumerable.Range(0, 250).Select(_ => TimeSpan.FromSeconds(0.1f))),
         new(Enumerable.Range(0, 5).Select(_ => TimeSpan.FromSeconds(5f))));
-    readonly MemoryMappedFile _memory;
+    readonly Memory _memory = Utility.Memory("image");
     readonly object _lock = new();
     readonly ConcurrentQueue<Frame> _frames = new();
     readonly ConcurrentQueue<Icon> _icons = new();
     readonly HashSet<int> _cancel = new();
     readonly ConcurrentDictionary<(Tags tags, bool loop), Request> _requests = new();
-
-    Comfy(Process process, MemoryMappedFile memory)
-    {
-        _process = process;
-        _memory = memory;
-    }
 
     public void Set(bool? play = null) => _play = play ?? _play;
     public bool Has(int? begin = null, int? end = null) => _begin >= begin || _end >= end;
@@ -332,7 +311,7 @@ public sealed class Comfy
                         {
                             Index = i,
                             Offset = offset,
-                            Data = await _memory.Read(offset, size),
+                            // Data = await _memory.Read(offset, size),
                         });
                         var now = watch.Elapsed;
                         if (_deltas.images.TryDequeue(out var ___)) _deltas.images.Enqueue(now - then.image);
@@ -356,7 +335,7 @@ public sealed class Comfy
                         Width = response.width,
                         Height = response.height,
                         Description = response.description,
-                        Data = await _memory.Read(offset, size),
+                        // Data = await _memory.Read(offset, size),
                     });
                 }
             }
@@ -394,12 +373,12 @@ public sealed class Comfy
             Version = version,
             Tags = _frame.Tags,
             Loop = false,
+            Width = _resolutions.low.width,
+            Height = _resolutions.low.height,
             Offset = _last.Offset,
             Size = _last.Size,
             Generation = _last.Generation,
             Shape = (_last.Width, _last.Height),
-            Width = _resolutions.low.width,
-            Height = _resolutions.low.height,
             Steps = 5,
             Guidance = 6f,
             Denoise = 0.4f,
@@ -478,7 +457,7 @@ public sealed class Comfy
         if (icon.Data.Length > 0)
             Load(icon.Width, icon.Height, icon.Data, image, ref texture);
         else
-            Load(icon.Width, icon.Height, icon.Offset, _memory, image, ref texture);
+            Load(icon.Width, icon.Height, icon.Offset, icon.Size, _memory, image, ref texture);
         Pool<byte>.Put(ref icon.Data);
     }
 
@@ -487,7 +466,7 @@ public sealed class Comfy
         if (frame.Data.Length > 0)
             Load(frame.Width, frame.Height, frame.Data, image, ref texture);
         else
-            Load(frame.Width, frame.Height, frame.Offset, _memory, image, ref texture);
+            Load(frame.Width, frame.Height, frame.Offset, frame.Size, _memory, image, ref texture);
         Pool<byte>.Put(ref frame.Data);
     }
 
