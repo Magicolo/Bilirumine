@@ -49,6 +49,7 @@ public sealed class Comfy
         public float Guidance;
         public float Denoise;
         public bool Full;
+        public bool Last;
         public int[] Cancel = Array.Empty<int>();
         public int[] Pause = Array.Empty<int>();
         public int[] Resume = Array.Empty<int>();
@@ -144,7 +145,8 @@ public sealed class Comfy
         Width = _resolutions.high.width,
         Height = _resolutions.high.height,
         Loop = true,
-        Zoom = 64,
+        Last = true,
+        Zoom = 96,
         Steps = 6,
         Guidance = 5f,
         Denoise = 0.7f,
@@ -375,10 +377,6 @@ public sealed class Comfy
             Loop = false,
             Width = _resolutions.low.width,
             Height = _resolutions.low.height,
-            Offset = _last.Offset,
-            Size = _last.Size,
-            Generation = _last.Generation,
-            Shape = (_last.Width, _last.Height),
             Steps = 5,
             Guidance = 6f,
             Denoise = 0.4f,
@@ -441,6 +439,18 @@ public sealed class Comfy
         foreach (var _ in Loop())
         {
             if (store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
+            if (request.Last) 
+            {
+                var last = _last;
+                request = request with 
+                {
+                    Offset = last.Offset,
+                    Size = last.Size,
+                    Generation = last.Generation,
+                    Shape = (last.Width, last.Height),
+                };
+            }
+
             try
             {
                 Log($"Sending input '{request}'.");

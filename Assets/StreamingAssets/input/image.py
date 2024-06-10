@@ -193,7 +193,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
         (interpolated,) = interpolator.vfi(
             ckpt_name="rife49.pth",
             frames=batched,
-            clear_cache_after_n_frames=1000,
+            clear_cache_after_n_frames=5000,
             multiplier=10,
             fast_mode=True,
             ensemble=True,
@@ -203,7 +203,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
         (images,) = interpolator.vfi(
             ckpt_name="rife49.pth",
             frames=interpolated,
-            clear_cache_after_n_frames=1000,
+            clear_cache_after_n_frames=5000,
             multiplier=10,
             fast_mode=True,
             ensemble=True,
@@ -233,8 +233,6 @@ def write(receive: SimpleQueue):
         data = images.tobytes()
         yield None
         offset, size, generation = MEMORY.write(data)
-        yield None
-        torch.cuda.empty_cache()
         yield (width, height, count, offset, size, generation)
 
     with torch.inference_mode():
