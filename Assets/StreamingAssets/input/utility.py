@@ -13,6 +13,7 @@ class Memory:
         self.generation = 1
         with open(f"/dev/shm/bilirumine_{name}", "r+b") as file:
             self.memory = mmap.mmap(file.fileno(), capacity, access=mmap.ACCESS_WRITE)
+        self._release()
 
     def read(self, offset: int, size: int, generation: int) -> Optional[bytes]:
         if size <= 0 or offset < 0 or offset + size > self.capacity:
@@ -61,8 +62,10 @@ class Memory:
                 time.sleep(0.001)
 
     def _release(self) -> None:
-        os.remove(self.lock)
-        pass
+        try:
+            os.remove(self.lock)
+        except FileNotFoundError:
+            pass
 
 
 def seed():

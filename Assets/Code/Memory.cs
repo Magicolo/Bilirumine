@@ -17,6 +17,7 @@ public sealed class Memory : IDisposable
         _path = $"/dev/shm/{file}";
         _lock = $"/tmp/bilirumine_{name}.lock";
         _memory = MemoryMappedFile.CreateFromFile(_path, FileMode.OpenOrCreate, file, capacity, MemoryMappedFileAccess.ReadWrite);
+        Release();
     }
 
     public async Task<byte[]> Read(int offset, int size)
@@ -94,6 +95,6 @@ public sealed class Memory : IDisposable
     void Release()
     {
         try { File.Delete(_lock); }
-        catch { }
+        catch (IOException) { }
     }
 }
