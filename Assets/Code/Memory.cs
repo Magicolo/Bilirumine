@@ -36,7 +36,7 @@ public sealed class Memory : IDisposable
 
     public unsafe bool Load(int offset, int size, Texture2D texture)
     {
-        Acquire().Wait();
+        Acquire();
         try
         {
             using var access = _memory.CreateViewAccessor();
@@ -55,7 +55,7 @@ public sealed class Memory : IDisposable
 
     public unsafe bool Load(int offset, int size, AudioClip clip)
     {
-        Acquire().Wait();
+        Acquire();
         try
         {
             using var access = _memory.CreateViewAccessor();
@@ -79,16 +79,21 @@ public sealed class Memory : IDisposable
         try { File.Delete(_lock); } catch { }
     }
 
-    async Task Acquire(int delay = 0)
+    void Acquire()
     {
         while (true)
         {
-            try { File.Open(_lock, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None).Dispose(); }
-            catch (IOException)
-            {
-                if (delay <= 0) await Task.Yield();
-                else await Task.Delay(delay);
-            }
+            try { using (File.Open(_lock, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) break; }
+            catch (IOException) { }
+        }
+    }
+
+    async Task Acquire(int delay)
+    {
+        while (true)
+        {
+            try { using (File.Open(_lock, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) break; }
+            catch (IOException) { await Task.Delay(delay); }
         }
     }
 

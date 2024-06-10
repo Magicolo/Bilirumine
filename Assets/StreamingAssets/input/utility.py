@@ -53,15 +53,14 @@ class Memory:
         finally:
             self._release()
 
-    def _acquire(self) -> None:
+    def _acquire(self):
         while True:
             try:
-                os.open(self.lock, os.O_CREAT | os.O_EXCL)
-                break
+                return os.open(self.lock, os.O_CREAT | os.O_EXCL)
             except FileExistsError:
                 time.sleep(0.001)
 
-    def _release(self) -> None:
+    def _release(self):
         try:
             os.remove(self.lock)
         except FileNotFoundError:
