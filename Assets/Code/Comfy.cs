@@ -49,7 +49,7 @@ public sealed class Comfy
         public float Guidance;
         public float Denoise;
         public bool Full;
-        public bool Last;
+        public bool Continue;
         public int[] Cancel = Array.Empty<int>();
         public int[] Pause = Array.Empty<int>();
         public int[] Resume = Array.Empty<int>();
@@ -145,7 +145,6 @@ public sealed class Comfy
         Width = _resolutions.high.width,
         Height = _resolutions.high.height,
         Loop = true,
-        Last = true,
         Zoom = 96,
         Steps = 6,
         Guidance = 5f,
@@ -373,8 +372,8 @@ public sealed class Comfy
         var template = _frame with
         {
             Version = version,
-            Tags = _frame.Tags,
             Loop = false,
+            Continue = true,
             Width = _resolutions.low.width,
             Height = _resolutions.low.height,
             Steps = 5,
@@ -392,7 +391,7 @@ public sealed class Comfy
             template with { Tags = template.Tags, Positive = $"{positives.from} {positives.to}" },
             template with { Tags = template.Tags, Positive = $"{positives.to} {positives.from}" },
             template with { Tags = template.Tags | Tags.End, Positive = positives.to },
-            _frame with { Version = Request.Reserve(), Positive = positives.to, Negative = negative }
+            _frame with { Version = Request.Reserve(), Positive = positives.to, Negative = negative, Continue = true }
         ), true);
         return version;
     }
@@ -439,17 +438,13 @@ public sealed class Comfy
         foreach (var _ in Loop())
         {
             if (store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
-            if (request.Last) 
+            if (request.Continue && _last is { } last) request = request with
             {
-                var last = _last;
-                request = request with 
-                {
-                    Offset = last.Offset,
-                    Size = last.Size,
-                    Generation = last.Generation,
-                    Shape = (last.Width, last.Height),
-                };
-            }
+                Offset = last.Offset,
+                Size = last.Size,
+                Generation = last.Generation,
+                Shape = (last.Width, last.Height),
+            };
 
             try
             {

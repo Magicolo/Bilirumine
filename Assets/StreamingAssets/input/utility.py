@@ -7,7 +7,7 @@ class Memory:
 
     def __init__(self, name: str, align: int = 8, capacity: int = 2**31 - 1):
         self.capacity = capacity
-        self.lock = f"/tmp/bilirumine_{name}.lock"
+        self.lock = f"/input/{name}.lock"
         self.next = 0
         self.align = align
         self.generation = 1

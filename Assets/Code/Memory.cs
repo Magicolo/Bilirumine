@@ -15,7 +15,7 @@ public sealed class Memory : IDisposable
     {
         var file = $"bilirumine_{name}";
         _path = $"/dev/shm/{file}";
-        _lock = $"/tmp/bilirumine_{name}.lock";
+        _lock = Path.Join(Application.streamingAssetsPath, "input", $"{name}.lock");
         _memory = MemoryMappedFile.CreateFromFile(_path, FileMode.OpenOrCreate, file, capacity, MemoryMappedFileAccess.ReadWrite);
         Release();
     }
