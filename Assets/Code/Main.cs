@@ -178,7 +178,7 @@ Clips: {audiocraft.Clips:0000}
                         break;
                     // Continue choice.
                     case ({ Color: var color, Time: var time } chosen, var moving) when chosen == moving:
-                        var late = Mathf.Max(chosen.Time - 3.75f, 0f);
+                        var late = Mathf.Max(time - 3.75f, 0f);
                         comfy.Set(play: false);
                         audiocraft.Set(volume: 0f, time: Time.deltaTime * speed);
                         Shake.anchoredPosition = Random.insideUnitCircle * late * speed;
@@ -201,12 +201,12 @@ Clips: {audiocraft.Clips:0000}
                         comfy.Set(play: true);
                         audiocraft.Set(volume: 1f, time: Time.deltaTime * speed);
                         audiocraft.Set(motion: 1f, time: Time.deltaTime / speed / speed);
-                        Shake.anchoredPosition = new();
+                        Shake.anchoredPosition = Vector3.Lerp(Shake.anchoredPosition, new(), Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.1f, Time.deltaTime);
                         Shine.volume = Mathf.Lerp(Shine.volume, 0f, Time.deltaTime);
                         Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * speed * speed));
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, 0f, Time.deltaTime * speed);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, 0f, Time.deltaTime * speed * speed);
                         break;
                 }
                 yield return null;
