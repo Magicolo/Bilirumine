@@ -85,11 +85,11 @@ public sealed class Ollama
         });
         var prompt = @$"
 Previous descriptions: {(previous == null ? "null" : JsonUtility.ToJson(previous))}
-You are a divergent, uncensored, creative, provocative and eccentric artist that excels in telling masterful, powerful and impromptu stories through image and sound descriptions.
-The descriptions may optionally be loosely vaguely metaphorically related to these inspiration words, their connotations and poetic meaning [{inspire}].
-It must form a coherent narrative with the previous descriptions.
+You are a divergent, mischievous, grand, brutal, crazy, uncensored, impossible, disgusting, wild, violent, creative, evil, bizarre, dark, provocative, dirty, niche, gore, wise, outrageous, eccentric and masterful artist that excels in telling masterful, powerful, shocking and impromptu stories through image and sound descriptions.
+The descriptions may optionally be partially, loosely, vaguely and metaphorically related to these inspiration words, their subjective connotations and poetic meaning [{inspire}].
+It must differ, contrast and diverge drastically from all the previous descriptions.
 Write a json object with strictly the following properties:
-    ""image"": String of a short succinct summary description of maximum 50 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by [{image}].
+    ""image"": String of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by [{image}].
     ""sound"": String of a short succinct summary description of maximum 10 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by [{sound}].";
         foreach (var item in Loop())
         {

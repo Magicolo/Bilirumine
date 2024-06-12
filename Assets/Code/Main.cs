@@ -121,13 +121,12 @@ Clips: {audiocraft.Clips:0000}
             var entry = task.Result;
             var speed = 3.75f;
             var styles = Utility.Styles("ultra detailed", "hyper realistic", "complex", "dense", "sharp");
-            var negative = string.Join(", ", "low detail", "plain", "simple", "sparse", "blurry", "worst quality", "nude", "nudity", "naked", "sexy", "sexual", "genital", "child", "children", "teenager", "woman");
             var positive = entry?.Positive ?? string.Join(", ", Inspire.Image.Random(25));
             var prompt = entry?.Prompt ?? string.Join(", ", Inspire.Sound.Random(10));
-            comfy.WriteFrames(positive, negative, entry?.Width, entry?.Height, entry?.Image);
+            comfy.WriteFrames(positive, entry?.Width, entry?.Height, entry?.Image);
             audiocraft.WriteClips(prompt, null, entry?.Sound);
             var bloom = Bloom.GetSetting<Bloom>();
-            var previous = GenerateIcons(0, negative, 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
+            var previous = GenerateIcons(0, 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
             var view = Canvas.LocalRectangle();
             var choice = (version: 0, positive, prompt, chosen: default(Arrow));
             var inputs = new bool[4];
@@ -153,7 +152,7 @@ Clips: {audiocraft.Clips:0000}
                         choice.chosen = moving;
                         choice.positive = $"{styles} ({moving.Color}) {image.Description}";
                         choice.prompt = $"({moving.Color}) {sound.Description}";
-                        choice.version = comfy.WriteBegin(moving, (positive, choice.positive), negative);
+                        choice.version = comfy.WriteBegin(moving, (positive, choice.positive));
                         Utility.Log(nameof(Main), $"Begin choice '{choice}'.");
                         break;
                     // Continue choice.
@@ -163,28 +162,28 @@ Clips: {audiocraft.Clips:0000}
                         var time = Mathf.Max(chosen.Time - 3.75f, 0f);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.25f, Time.deltaTime * speed);
                         Shine.volume = Mathf.Lerp(Shine.volume, time / 5f, Time.deltaTime * speed);
-                        Output.color = Color.Lerp(Output.color, new(0.25f, 0.25f, 0.25f, 1f), Time.deltaTime * speed);
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 25f, Time.deltaTime / speed / speed);
-                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color(0.1f) * 25f, Time.deltaTime / speed / speed);
+                        Output.color = Color.Lerp(Output.color, Color.gray, Time.deltaTime * speed);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 10f, Time.deltaTime / speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color(0.25f) * 10f, Time.deltaTime / speed);
                         break;
                     // End choice.
                     case ({ Chosen: true, Icons: ({ } image, { } sound) } chosen, var moving) when chosen == moving:
                         if (comfy.Has(begin: choice.version))
                         {
                             Utility.Log(nameof(Main), $"End choice '{choice}'.");
-                            Flash.color = chosen.Color.Color();
+                            Flash.color = chosen.Color.Color(0.25f);
+                            bloom.intensity.value = 25f;
+                            bloom.color.value = chosen.Color.Color(0.25f) * 25f;
                             Shatter.Play();
                             Rumble.Stop();
                             Move.Play();
-                            bloom.intensity.value = 25f;
-                            bloom.color.value = chosen.Color.Color(0.1f) * 25f;
                             comfy.Set(play: true);
                             comfy.WriteEnd();
                             audiocraft.Set(motion: -1f);
                             audiocraft.WriteClips(choice.prompt, sound, null);
                             positive = choice.positive;
                             prompt = choice.prompt;
-                            previous = GenerateIcons(choice.version, negative, Array.IndexOf(arrows, chosen), previous);
+                            previous = GenerateIcons(choice.version, Array.IndexOf(arrows, chosen), previous);
                             choice = (0, positive, prompt, null);
                             foreach (var arrow in arrows) arrow.Hide();
                             _ = Save(chosen, image, sound, positive, prompt);
@@ -205,20 +204,19 @@ Clips: {audiocraft.Clips:0000}
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.1f, Time.deltaTime);
                         Shine.volume = Mathf.Lerp(Shine.volume, 0f, Time.deltaTime);
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, 0f, Time.deltaTime);
-                        bloom.color.value = Color.Lerp(bloom.color.value, Color.white, Time.deltaTime);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, 0f, Time.deltaTime * speed);
                         break;
                 }
                 yield return null;
             }
 
-            Task<Ollama.Generation[]> GenerateIcons(int version, string negative, int index, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
+            Task<Ollama.Generation[]> GenerateIcons(int version, int index, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
             {
                 var random = new System.Random();
                 var generations = await previous;
                 var generation = await ollama.Generate(arrow.Color, generations.At(index));
                 await Task.WhenAll(
-                    comfy.WriteIcon(arrow, version, generation.Image, negative),
+                    comfy.WriteIcon(arrow, version, generation.Image),
                     audiocraft.WriteIcon(arrow, generation.Sound));
                 return generation;
             }));

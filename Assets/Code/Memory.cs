@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -22,7 +23,7 @@ public sealed class Memory : IDisposable
 
     public async Task<byte[]> Read(int offset, int size)
     {
-        await Acquire(1);
+        await AcquireAsync();
         try
         {
             using var stream = _memory.CreateViewStream();
@@ -83,17 +84,33 @@ public sealed class Memory : IDisposable
     {
         while (true)
         {
-            try { using (File.Open(_lock, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) break; }
-            catch (IOException) { }
+            for (int i = 0; i < 10; i++)
+            {
+                for (int j = 0; j < 10; j++)
+                {
+                    try { using (File.Open(_lock, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) return; }
+                    catch (IOException) { }
+                }
+                Thread.Yield();
+            }
+            Thread.Sleep(1);
         }
     }
 
-    async Task Acquire(int delay)
+    async Task AcquireAsync()
     {
         while (true)
         {
-            try { using (File.Open(_lock, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) break; }
-            catch (IOException) { await Task.Delay(delay); }
+            for (int i = 0; i < 10; i++)
+            {
+                for (int j = 0; j < 10; j++)
+                {
+                    try { using (File.Open(_lock, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) return; }
+                    catch (IOException) { }
+                }
+                await Task.Yield();
+            }
+            await Task.Delay(1);
         }
     }
 

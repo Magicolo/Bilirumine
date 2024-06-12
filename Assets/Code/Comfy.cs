@@ -46,9 +46,9 @@ public sealed class Comfy
         public int Top;
         public int Zoom;
         public int Steps;
+        public (float scale, int multiplier)[] Interpolations = Array.Empty<(float, int)>();
         public float Guidance;
         public float Denoise;
-        public bool Full;
         public bool Continue;
         public int[] Cancel = Array.Empty<int>();
         public int[] Pause = Array.Empty<int>();
@@ -81,7 +81,7 @@ public sealed class Comfy
 ""steps"":{Steps},
 ""guidance"":{Guidance},
 ""denoise"":{Denoise},
-""full"":{(Full ? "True" : "False")},
+""interpolations"":[{string.Join(", ", Interpolations.Select(pair => $"({pair.scale},{pair.multiplier})"))}],
 ""cancel"":[{string.Join(",", Cancel)}],
 ""pause"":[{string.Join(",", Pause)}],
 ""resume"":[{string.Join(",", Resume)}],
@@ -138,18 +138,41 @@ public sealed class Comfy
         public byte[] Data = Array.Empty<byte>();
     }
 
-    static readonly ((int width, int height) low, (int width, int height) high) _resolutions = ((768, 512), (1024, 768));
+    static readonly string _negative = string.Join(", ", "low detail", "plain", "simple", "sparse", "blurry", "worst quality", "nude", "nudity", "naked", "sexy", "sexual", "genital", "child", "children", "teenager", "woman");
     static readonly Request _frame = new()
     {
         Tags = Tags.Frame,
-        Width = _resolutions.high.width,
-        Height = _resolutions.high.height,
-        Loop = true,
-        Zoom = 96,
+        Width = 1024,
+        Height = 768,
         Steps = 6,
         Guidance = 5f,
         Denoise = 0.7f,
-        Full = true,
+        Zoom = 96,
+        Loop = true,
+        Interpolations = new[] { (0.25f, 10), (1f, 10) },
+        Negative = _negative,
+    };
+    static readonly Request _move = new()
+    {
+        Tags = Tags.Frame | Tags.Move,
+        Width = 768,
+        Height = 512,
+        Steps = 5,
+        Guidance = 6f,
+        Denoise = 0.4f,
+        Continue = true,
+        Interpolations = new[] { (0.25f, 10), (0.5f, 10) },
+        Negative = _negative,
+    };
+    static readonly Request _icon = new()
+    {
+        Tags = Tags.Icon,
+        Width = 512,
+        Height = 512,
+        Steps = 5,
+        Guidance = 6f,
+        Denoise = 0.7f,
+        Negative = _negative,
     };
 
     public unsafe static void Load(int width, int height, int offset, int size, Memory memory, ref Texture2D? texture)
@@ -308,12 +331,7 @@ public sealed class Comfy
                     };
                     for (int i = 0; i < response.count; i++, offset += size)
                     {
-                        _frames.Enqueue(frame with
-                        {
-                            Index = i,
-                            Offset = offset,
-                            // Data = await _memory.Read(offset, size),
-                        });
+                        _frames.Enqueue(frame with { Index = i, Offset = offset });
                         var now = watch.Elapsed;
                         if (_deltas.images.TryDequeue(out var ___)) _deltas.images.Enqueue(now - then.image);
                         then.image = now;
@@ -336,7 +354,6 @@ public sealed class Comfy
                         Width = response.width,
                         Height = response.height,
                         Description = response.description,
-                        // Data = await _memory.Read(offset, size),
                     });
                 }
             }
@@ -346,7 +363,7 @@ public sealed class Comfy
         }
     }
 
-    public void WriteFrames(string positive, string negative, int? width, int? height, string? data)
+    public void WriteFrames(string positive, int? width, int? height, string? data)
     {
         var cancel = 0;
         if (_requests.TryRemove((_frame.Tags, true), out var request)) _cancel.Add(cancel = request.Version);
@@ -358,28 +375,19 @@ public sealed class Comfy
             Empty = true,
             Shape = (width ?? 0, height ?? 0),
             Positive = positive,
-            Negative = negative,
             Cancel = new[] { cancel },
         }, true);
     }
 
-    public int WriteBegin(Arrow arrow, (string from, string to) positives, string negative)
+    public int WriteBegin(Arrow arrow, (string from, string to) positives)
     {
         var pause = 0;
         if (_requests.TryGetValue((_frame.Tags, true), out var request)) pause = request.Version;
 
         var version = Request.Reserve();
-        var template = _frame with
+        var template = _move with
         {
             Version = version,
-            Loop = false,
-            Continue = true,
-            Width = _resolutions.low.width,
-            Height = _resolutions.low.height,
-            Steps = 5,
-            Guidance = 6f,
-            Denoise = 0.4f,
-            Negative = negative,
             Pause = new[] { pause },
             Left = Math.Max(-arrow.Direction.x, 0),
             Right = Math.Max(arrow.Direction.x, 0),
@@ -391,7 +399,7 @@ public sealed class Comfy
             template with { Tags = template.Tags, Positive = $"{positives.from} {positives.to}" },
             template with { Tags = template.Tags, Positive = $"{positives.to} {positives.from}" },
             template with { Tags = template.Tags | Tags.End, Positive = positives.to },
-            _frame with { Version = Request.Reserve(), Positive = positives.to, Negative = negative, Continue = true }
+            _frame with { Version = version, Positive = positives.to, Continue = true }
         ), true);
         return version;
     }
@@ -401,7 +409,7 @@ public sealed class Comfy
         var cancel = 0;
         if (_requests.TryRemove((_frame.Tags, true), out var request))
             _cancel.Add(cancel = request.Version);
-        if (_requests.TryRemove((_frame.Tags | Tags.Begin, true), out request) && request.Last with { Empty = true } is { } last)
+        if (_requests.TryRemove((_move.Tags | Tags.Begin, true), out request) && request.Last with { Empty = true } is { } last)
             _requests.AddOrUpdate((last.Tags, true), last, (_, _) => last);
         Write(new() { Version = Request.Reserve(), Cancel = new[] { cancel } }, false);
     }
@@ -414,47 +422,44 @@ public sealed class Comfy
         Write(new() { Version = Request.Reserve(), Resume = new[] { resume }, Cancel = new[] { version } }, false);
     }
 
-    public async Task WriteIcon(Arrow arrow, int version, string positive, string negative)
+    public async Task WriteIcon(Arrow arrow, int version, string positive)
     {
         for (int i = 0; i < 256 && _end < version; i++) await Task.Delay(100);
-        Write(new()
+        Write(_icon with
         {
             Version = Request.Reserve(),
-            Tags = Tags.Icon | arrow.Tags,
+            Tags = _icon.Tags | arrow.Tags,
             Load = $"{arrow.Color}.png".ToLowerInvariant(),
             Positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {positive}",
-            Negative = negative,
-            Width = 512,
-            Height = 512,
-            Steps = 5,
-            Guidance = 6f,
-            Denoise = 0.7f,
             Description = positive,
         }, true);
     }
 
     void Write(Request request, bool store)
     {
-        foreach (var _ in Loop())
-        {
-            if (store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
-            if (request.Continue && _last is { } last) request = request with
-            {
-                Offset = last.Offset,
-                Size = last.Size,
-                Generation = last.Generation,
-                Shape = (last.Width, last.Height),
-            };
+        foreach (var _ in Loop()) if (TryWrite(request, store)) break;
+    }
 
-            try
-            {
-                Log($"Sending input '{request}'.");
-                _process.StandardInput.WriteLine($"{request}");
-                _process.StandardInput.Flush();
-                break;
-            }
-            catch (Exception exception) { Except(exception); }
+    bool TryWrite(Request request, bool store)
+    {
+        if (store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
+        if (request.Continue && _last is { } last) request = request with
+        {
+            Offset = last.Offset,
+            Size = last.Size,
+            Generation = last.Generation,
+            Shape = (last.Width, last.Height),
+        };
+
+        try
+        {
+            Log($"Sending input '{request}'.");
+            _process.StandardInput.WriteLine($"{request}");
+            _process.StandardInput.Flush();
+            return true;
         }
+        catch (Exception exception) { Except(exception); }
+        return false;
     }
 
     void Load(Icon icon, Image image, ref Texture2D? texture)
@@ -487,7 +492,7 @@ public sealed class Comfy
                     {
                         Warn("Restarting docker container.");
                         _process = Utility.Docker("comfy");
-                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version)) Write(pair.Value, true);
+                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version)) TryWrite(pair.Value, true);
                     }
                 }
             }

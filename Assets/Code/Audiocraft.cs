@@ -290,12 +290,7 @@ public sealed class Audiocraft
                         Generation = response.generation,
                     };
                     for (int i = 0; i < response.count; i++, offset += size)
-                        _clips.Enqueue(clip with
-                        {
-                            Index = i,
-                            Offset = offset,
-                            // Data = await _memory.Read(offset, size),
-                        });
+                        _clips.Enqueue(clip with { Index = i, Offset = offset });
                 }
                 if (tags.HasFlag(Tags.Icon))
                 {
@@ -310,7 +305,6 @@ public sealed class Audiocraft
                         Channels = response.channels,
                         Generation = response.generation,
                         Description = response.description,
-                        // Data = await _memory.Read(offset, size),
                     });
                 }
             }
@@ -322,18 +316,21 @@ public sealed class Audiocraft
 
     void Write(Request request, bool store)
     {
-        foreach (var _ in Loop())
+        foreach (var _ in Loop()) if (TryWrite(request, store)) break;
+    }
+
+    bool TryWrite(Request request, bool store)
+    {
+        if (store) _requests.AddOrUpdate((request.Tags, request.Loop), request, (_, _) => request);
+        try
         {
-            if (store) _requests.AddOrUpdate((request.Tags, request.Loop), request, (_, _) => request);
-            try
-            {
-                Log($"Sending input '{request}'.");
-                _process.StandardInput.WriteLine($"{request}");
-                _process.StandardInput.Flush();
-                break;
-            }
-            catch (Exception exception) { Except(exception); }
+            Log($"Sending input '{request}'.");
+            _process.StandardInput.WriteLine($"{request}");
+            _process.StandardInput.Flush();
+            return true;
         }
+        catch (Exception exception) { Except(exception); }
+        return false;
     }
 
     void Load(Clip clip, ref AudioClip? audio)
@@ -366,7 +363,7 @@ public sealed class Audiocraft
                     {
                         Warn("Restarting docker container.");
                         _process = Utility.Docker("audiocraft");
-                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version)) Write(pair.Value, true);
+                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version)) TryWrite(pair.Value, true);
                     }
                 }
             }

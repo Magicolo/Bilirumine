@@ -55,9 +55,9 @@ public static class Utility
         Application.quitting += () => { try { process.Dispose(); } catch { } };
         _ = Task.Run(async () =>
         {
-            while (!process.HasExited)
+            while (process is { HasExited: false, StandardError: var error })
             {
-                var line = await process.StandardError.ReadLineAsync();
+                var line = await error.ReadLineAsync();
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 Warn(name, line);
             }
@@ -96,14 +96,14 @@ public static class Utility
         return client;
     }
 
-    public static Color Color(this Colors color, float gray = 0f) => UnityEngine.Color.Lerp(color switch
+    public static Color Color(this Colors color, float white = 0f) => UnityEngine.Color.Lerp(color switch
     {
         Colors.Green => UnityEngine.Color.green,
         Colors.White => UnityEngine.Color.white,
         Colors.Red => UnityEngine.Color.red,
         Colors.Yellow => UnityEngine.Color.yellow,
         _ => throw new InvalidOperationException(),
-    }, UnityEngine.Color.gray, gray);
+    }, UnityEngine.Color.white, white);
 
     public static void Or(bool[] left, bool[] right, bool[] result)
     {

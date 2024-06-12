@@ -31,6 +31,8 @@ public sealed class Arduino
         while (_serial is { IsConnected: true, Stream: var stream })
         {
             var count = await stream.ReadAsync(buffer);
+            if (count <= 0) break;
+
             for (int i = 0; i < count; i++)
             {
                 if (buffer[i] == byte.MaxValue) index = 0;

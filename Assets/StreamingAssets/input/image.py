@@ -1,9 +1,8 @@
-import asyncio, sys, threading, torch, asyncio, utility, base64, json
+import sys, threading, torch, utility, base64, json
 from utility import Memory
 from queue import SimpleQueue
 
 sys.path.append("/comfy")
-import server, execution
 from nodes import (
     ImageBatch,
     CLIPTextEncode,
@@ -140,9 +139,7 @@ def extend(receive: SimpleQueue, send: SimpleQueue):
             send.put((state, scaled, zoomed), block=False)
 
 
-def detail(
-    receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue, end: SimpleQueue
-):
+def detail(receive: SimpleQueue, send: SimpleQueue, loop: SimpleQueue):
 
     def steps(state: dict, _, zoomed):
         yield None
@@ -174,11 +171,7 @@ def detail(
         decoder = VAEDecode()
         sampler = KSampler()
         for state, (scaled, _), (decoded,) in utility.work(receive, steps):
-            if state["full"]:
-                send.put((state, scaled, decoded), block=False)
-            else:
-                end.put((state, decoded), block=False)
-
+            send.put((state, scaled, decoded), block=False)
             if state["next"]:
                 loop.put(({**state, **state["next"]}, decoded), block=False)
             elif state["loop"]:
@@ -186,29 +179,23 @@ def detail(
 
 
 def interpolate(receive: SimpleQueue, send: SimpleQueue):
-    def steps(_, scaled, decoded):
+
+    def steps(state, scaled, decoded):
         yield None
         (batched,) = batcher.batch(scaled, decoded)
         yield None
-        (interpolated,) = interpolator.vfi(
-            ckpt_name="rife49.pth",
-            frames=batched,
-            clear_cache_after_n_frames=5000,
-            multiplier=10,
-            fast_mode=True,
-            ensemble=True,
-            scale_factor=0.25,
-        )
-        yield None
-        (images,) = interpolator.vfi(
-            ckpt_name="rife49.pth",
-            frames=interpolated,
-            clear_cache_after_n_frames=5000,
-            multiplier=10,
-            fast_mode=True,
-            ensemble=True,
-            scale_factor=1,
-        )
+        images = batched
+        for scale, multiplier in state["interpolations"]:
+            yield None
+            (images,) = interpolator.vfi(
+                ckpt_name="rife49.pth",
+                frames=images,
+                clear_cache_after_n_frames=5000,
+                multiplier=multiplier,
+                fast_mode=True,
+                ensemble=True,
+                scale_factor=scale,
+            )
         yield (images,)
 
     with torch.inference_mode():
@@ -219,6 +206,7 @@ def interpolate(receive: SimpleQueue, send: SimpleQueue):
 
 
 def write(receive: SimpleQueue):
+
     def steps(_, images):
         yield None
         [count, height, width, _] = images.shape
@@ -256,10 +244,6 @@ def write(receive: SimpleQueue):
 
 
 MEMORY = Memory("image")
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-instance = server.PromptServer(loop)
-execution.PromptQueue(instance)
 init_custom_nodes()
 a = SimpleQueue()
 b = SimpleQueue()
@@ -268,7 +252,7 @@ d = SimpleQueue()
 threads = [
     threading.Thread(target=read, args=(a,)),
     threading.Thread(target=extend, args=(a, b)),
-    threading.Thread(target=detail, args=(b, c, a, d)),
+    threading.Thread(target=detail, args=(b, c, a)),
     threading.Thread(target=interpolate, args=(c, d)),
     threading.Thread(target=write, args=(d,)),
 ]
