@@ -58,7 +58,6 @@ public sealed class Arrow : MonoBehaviour
 
     public bool Idle => Time <= 0f;
     public bool Moving => Time > 0f;
-    public bool Chosen => Time >= 5f;
     public bool Hidden => Icons is (null, _) or (_, null);
 
     (float root, float socket) _offsets;

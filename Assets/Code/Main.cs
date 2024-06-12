@@ -46,6 +46,7 @@ public sealed class Main : MonoBehaviour
     static readonly string _history = Path.Join(Application.streamingAssetsPath, "history.json");
 
     public RectTransform Canvas = default!;
+    public RectTransform Shake = default!;
     public Arrow Left = default!;
     public Arrow Right = default!;
     public Arrow Up = default!;
@@ -84,7 +85,6 @@ public sealed class Main : MonoBehaviour
 
         foreach (var item in Utility.Wait(comfy.Read(), audiocraft.Read(), arduino.Read(_inputs.Buttons)))
         {
-            Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * 5f));
             Cursor.visible = Application.isEditor;
             yield return item;
         }
@@ -147,6 +147,7 @@ Clips: {audiocraft.Clips:0000}
                         Rumble.Play();
                         Shine.Play();
                         moving.Sound.Play();
+                        Flash.color = moving.Color.Color().With(a: 0f);
                         bloom.intensity.value = 0f;
                         bloom.color.value = Color.white;
                         choice.chosen = moving;
@@ -155,39 +156,38 @@ Clips: {audiocraft.Clips:0000}
                         choice.version = comfy.WriteBegin(moving, (positive, choice.positive));
                         Utility.Log(nameof(Main), $"Begin choice '{choice}'.");
                         break;
+                    // End choice.
+                    case ({ Icons: ({ } image, { } sound), Color: var color } chosen, var moving) when chosen == moving && comfy.Has(begin: choice.version):
+                        Utility.Log(nameof(Main), $"End choice '{choice}'.");
+                        Flash.color = color.Color(0.25f);
+                        bloom.intensity.value = 25f;
+                        bloom.color.value = color.Color(0.25f) * 25f;
+                        Shatter.Play();
+                        Rumble.Stop();
+                        Move.Play();
+                        comfy.Set(play: true);
+                        comfy.WriteEnd();
+                        audiocraft.Set(motion: -1f);
+                        audiocraft.WriteClips(choice.prompt, sound, null);
+                        positive = choice.positive;
+                        prompt = choice.prompt;
+                        previous = GenerateIcons(choice.version, Array.IndexOf(arrows, chosen), previous);
+                        choice = (0, positive, prompt, null);
+                        foreach (var arrow in arrows) arrow.Hide();
+                        _ = Save(chosen, image, sound, positive, prompt);
+                        break;
                     // Continue choice.
-                    case ({ Chosen: false } chosen, var moving) when chosen == moving:
+                    case ({ Color: var color, Time: var time } chosen, var moving) when chosen == moving:
+                        var late = Mathf.Max(chosen.Time - 3.75f, 0f);
                         comfy.Set(play: false);
                         audiocraft.Set(volume: 0f, time: Time.deltaTime * speed);
-                        var time = Mathf.Max(chosen.Time - 3.75f, 0f);
-                        Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.25f, Time.deltaTime * speed);
-                        Shine.volume = Mathf.Lerp(Shine.volume, time / 5f, Time.deltaTime * speed);
+                        Shake.anchoredPosition = Random.insideUnitCircle * late * speed;
+                        Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.5f, Time.deltaTime * speed);
+                        Shine.volume = Mathf.Lerp(Shine.volume, late / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, Color.gray, Time.deltaTime * speed);
-                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, time * 10f, Time.deltaTime / speed);
-                        bloom.color.value = Color.Lerp(bloom.color.value, chosen.Color.Color(0.25f) * 10f, Time.deltaTime / speed);
-                        break;
-                    // End choice.
-                    case ({ Chosen: true, Icons: ({ } image, { } sound) } chosen, var moving) when chosen == moving:
-                        if (comfy.Has(begin: choice.version))
-                        {
-                            Utility.Log(nameof(Main), $"End choice '{choice}'.");
-                            Flash.color = chosen.Color.Color(0.25f);
-                            bloom.intensity.value = 25f;
-                            bloom.color.value = chosen.Color.Color(0.25f) * 25f;
-                            Shatter.Play();
-                            Rumble.Stop();
-                            Move.Play();
-                            comfy.Set(play: true);
-                            comfy.WriteEnd();
-                            audiocraft.Set(motion: -1f);
-                            audiocraft.WriteClips(choice.prompt, sound, null);
-                            positive = choice.positive;
-                            prompt = choice.prompt;
-                            previous = GenerateIcons(choice.version, Array.IndexOf(arrows, chosen), previous);
-                            choice = (0, positive, prompt, null);
-                            foreach (var arrow in arrows) arrow.Hide();
-                            _ = Save(chosen, image, sound, positive, prompt);
-                        }
+                        Flash.color = Flash.color.With(a: late / 10f);
+                        bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, late * 10f, Time.deltaTime / speed);
+                        bloom.color.value = Color.Lerp(bloom.color.value, color.Color(0.25f) * 10f, Time.deltaTime / speed);
                         break;
                     // Cancel choice.
                     case ({ } chosen, var moving) when chosen != moving:
@@ -201,9 +201,11 @@ Clips: {audiocraft.Clips:0000}
                         comfy.Set(play: true);
                         audiocraft.Set(volume: 1f, time: Time.deltaTime * speed);
                         audiocraft.Set(motion: 1f, time: Time.deltaTime / speed / speed);
+                        Shake.anchoredPosition = new();
                         Output.color = Color.Lerp(Output.color, Color.white, Time.deltaTime * speed);
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.1f, Time.deltaTime);
                         Shine.volume = Mathf.Lerp(Shine.volume, 0f, Time.deltaTime);
+                        Flash.color = Flash.color.With(a: Mathf.Lerp(Flash.color.a, 0f, Time.deltaTime * speed * speed));
                         bloom.intensity.value = Mathf.Lerp(bloom.intensity.value, 0f, Time.deltaTime * speed);
                         break;
                 }
