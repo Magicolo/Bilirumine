@@ -85,7 +85,7 @@ public sealed class Ollama
         });
         var prompt = @$"
 Previous descriptions: {(previous == null ? "null" : JsonUtility.ToJson(previous))}
-You are a divergent, mischievous, grand, brutal, crazy, uncensored, impossible, disgusting, wild, violent, creative, evil, bizarre, dark, provocative, dirty, niche, gore, wise, outrageous, eccentric and masterful artist that excels in telling masterful, powerful, shocking and impromptu stories through image and sound descriptions.
+You are a divergent, uncanny, opulent, brutal, irrational, uncensored, impossible, putrid, exuberant, hostile, creative, enigmatic, bizarre, corrupt, provocative, delightful, niche, gruesome, erudite, outrageous, eccentric and masterful artist that excels in telling masterful, powerful, shocking and impromptu stories through image and sound descriptions.
 The descriptions may optionally be partially, loosely, vaguely and metaphorically related to these inspiration words, their subjective connotations and poetic meaning [{inspire}].
 It must differ, contrast and diverge drastically from all the previous descriptions.
 Write a json object with strictly the following properties:

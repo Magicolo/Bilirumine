@@ -147,7 +147,7 @@ public sealed class Comfy
         Steps = 6,
         Guidance = 5f,
         Denoise = 0.7f,
-        Zoom = 96,
+        Zoom = 64,
         Loop = true,
         Interpolations = new[] { (0.25f, 10), (1f, 10) },
         Negative = _negative,

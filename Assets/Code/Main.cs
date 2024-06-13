@@ -181,7 +181,7 @@ Clips: {audiocraft.Clips:0000}
                         var late = Mathf.Max(time - 3.75f, 0f);
                         comfy.Set(play: false);
                         audiocraft.Set(volume: 0f, time: Time.deltaTime * speed);
-                        Shake.anchoredPosition = Random.insideUnitCircle * late * speed;
+                        Shake.anchoredPosition = Random.insideUnitCircle * late;
                         Rumble.pitch = Mathf.Lerp(Rumble.pitch, 0.5f, Time.deltaTime * speed);
                         Shine.volume = Mathf.Lerp(Shine.volume, late / 5f, Time.deltaTime * speed);
                         Output.color = Color.Lerp(Output.color, Color.gray, Time.deltaTime * speed);
