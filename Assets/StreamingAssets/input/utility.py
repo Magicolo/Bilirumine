@@ -55,10 +55,14 @@ class Memory:
 
     def _acquire(self):
         while True:
-            try:
-                return os.open(self.lock, os.O_CREAT | os.O_EXCL)
-            except FileExistsError:
-                time.sleep(0.001)
+            for _ in range(10):
+                for _ in range(10):
+                    try:
+                        return os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                    except FileExistsError:
+                        pass
+                time.sleep(0)
+            time.sleep(0.001)
 
     def _release(self):
         try:

@@ -181,7 +181,6 @@ public sealed class Comfy
             texture = new Texture2D(width, height, TextureFormat.RGB24, 1, true, true);
 
         memory.Load(offset, size, texture);
-        texture.Apply();
     }
 
     public static void Load(int width, int height, byte[] data, ref Texture2D? texture)
@@ -331,7 +330,12 @@ public sealed class Comfy
                     };
                     for (int i = 0; i < response.count; i++, offset += size)
                     {
-                        _frames.Enqueue(frame with { Index = i, Offset = offset });
+                        _frames.Enqueue(frame with
+                        {
+                            Index = i,
+                            Offset = offset,
+                            Data = await _memory.Read(offset, size)
+                        });
                         var now = watch.Elapsed;
                         if (_deltas.images.TryDequeue(out var ___)) _deltas.images.Enqueue(now - then.image);
                         then.image = now;
@@ -342,7 +346,7 @@ public sealed class Comfy
                         then.batch = now;
                     }
                 }
-                if (tags.HasFlag(Tags.Icon))
+                else if (tags.HasFlag(Tags.Icon))
                 {
                     _icons.Enqueue(new()
                     {
@@ -354,6 +358,7 @@ public sealed class Comfy
                         Width = response.width,
                         Height = response.height,
                         Description = response.description,
+                        Data = await _memory.Read(offset, size),
                     });
                 }
             }

@@ -290,9 +290,14 @@ public sealed class Audiocraft
                         Generation = response.generation,
                     };
                     for (int i = 0; i < response.count; i++, offset += size)
-                        _clips.Enqueue(clip with { Index = i, Offset = offset });
+                        _clips.Enqueue(clip with
+                        {
+                            Index = i,
+                            Offset = offset,
+                            Data = await _memory.Read(offset, size),
+                        });
                 }
-                if (tags.HasFlag(Tags.Icon))
+                else if (tags.HasFlag(Tags.Icon))
                 {
                     _icons.Enqueue(new()
                     {
@@ -305,6 +310,7 @@ public sealed class Audiocraft
                         Channels = response.channels,
                         Generation = response.generation,
                         Description = response.description,
+                        Data = await _memory.Read(offset, size),
                     });
                 }
             }

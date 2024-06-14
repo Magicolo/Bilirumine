@@ -47,6 +47,7 @@ public sealed class Memory : IDisposable
                 access.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
                 if (pointer == null) throw new NullReferenceException();
                 texture.LoadRawTextureData((IntPtr)(pointer + offset), size);
+                texture.Apply();
                 return true;
             }
             finally { access.SafeMemoryMappedViewHandle.ReleasePointer(); }
