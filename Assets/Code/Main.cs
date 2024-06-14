@@ -91,7 +91,7 @@ public sealed class Main : MonoBehaviour
 
         IEnumerator UpdateDebug()
         {
-            var show = Application.isEditor;
+            var show = Application.isEditor || Debug.isDebugBuild;
             while (true)
             {
                 if (_inputs.Tab.Take()) show = !show;
@@ -134,8 +134,8 @@ Clips: {audiocraft.Clips:0000}
             {
                 arduino.Set(arrows.None(arrow => arrow.Hidden));
                 Utility.Or(_inputs.Buttons, _inputs.Arrows, inputs);
-                UpdateIcon(Left, arrows, speed, 1, inputs, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
                 UpdateIcon(Right, arrows, speed, 0, inputs, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
+                UpdateIcon(Left, arrows, speed, 1, inputs, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
                 UpdateIcon(Up, arrows, speed, 2, inputs, position => position.With(y: 0f), position => position.With(y: view.height / 2 + 64), position => position.With(y: view.height * 8));
                 UpdateIcon(Down, arrows, speed, 3, inputs, position => position.With(y: 0f), position => position.With(y: -view.height / 2 - 64), position => position.With(y: -view.height * 8));
 

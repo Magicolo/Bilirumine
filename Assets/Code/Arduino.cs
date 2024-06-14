@@ -30,9 +30,8 @@ public sealed class Arduino
 
     public async Task Read(bool[] inputs)
     {
-        // var index = 0;
-        var write = new byte[1] { 0 };
-        var read = new byte[4];
+        var read = new byte[inputs.Length * 2];
+        var write = new byte[1];
         while (_serial is { IsConnected: true, Stream: var stream })
         {
             write[0] = _enable ? (byte)1 : (byte)0;
@@ -40,15 +39,6 @@ public sealed class Arduino
             await stream.FlushAsync();
             if (await stream.ReadAsync(read) == 0) break;
             for (int i = 0; i < inputs.Length; i++) inputs[i] = read[i] > 0;
-
-            // var count = await stream.ReadAsync(read);
-            // if (count <= 0) break;
-
-            // for (int i = 0; i < count; i++)
-            // {
-            //     if (read[i] == byte.MaxValue) index = 0;
-            //     else if (index < inputs.Length) inputs[index++] = read[i] > 0;
-            // }
         }
     }
 }

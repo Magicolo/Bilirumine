@@ -1,8 +1,8 @@
 int inputs[4] = { 2, 5, 8, 11 };
 int outputs[4] = { 3, 6, 9, 12 };
 int lights[4] = { 4, 7, 10, 13 };
-byte write[4] = { 0, 0, 0, 0 };
 byte read[1] = { 0 };
+byte write[4] = { 0, 0, 0, 0 };
 
 void setup()
 {
@@ -16,7 +16,7 @@ void setup()
 
 void loop()
 {
-  if (Serial.readBytes(read, 1) == 0) return;
+  while (Serial.readBytes(read, 1) == 0) delay(1);
 
   for (int i = 0; i < 4; i++) {
     digitalWrite(outputs[i], LOW); 
