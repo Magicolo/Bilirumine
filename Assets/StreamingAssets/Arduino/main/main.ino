@@ -1,7 +1,8 @@
 int inputs[4] = { 2, 5, 8, 11 };
 int outputs[4] = { 3, 6, 9, 12 };
 int lights[4] = { 4, 7, 10, 13 };
-byte states[5] = { 0, 0, 0, 0, 255 };
+byte write[4] = { 0, 0, 0, 0 };
+byte read[1] = { 0 };
 
 void setup()
 {
@@ -15,14 +16,17 @@ void setup()
 
 void loop()
 {
+  if (Serial.readBytes(read, 1) == 0) return;
+
   for (int i = 0; i < 4; i++) {
     digitalWrite(outputs[i], LOW); 
   }
+
   for (int i = 0; i < 4; i++) {
-    states[i] = digitalRead(inputs[i]) == 0;
-    digitalWrite(lights[i], states[i] ? LOW : HIGH);
+    write[i] = digitalRead(inputs[i]) == 0;
+    digitalWrite(lights[i], read[0] == 0 || write[i] ? LOW : HIGH);
   }
-  Serial.write(states, 5);
+
+  Serial.write(write, 4);
   Serial.flush();
-  delay(5);
 }

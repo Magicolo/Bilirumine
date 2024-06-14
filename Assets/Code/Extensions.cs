@@ -504,6 +504,9 @@ public static class Extensions
         }
     }
 
+    public static bool None<T>(this IEnumerable<T> source) => !source.Any();
+    public static bool None<T>(this IEnumerable<T> source, Func<T, bool> predicate) => !source.Any(predicate);
+
     public static IEnumerable<(T item, int index)> Enumerate<T>(this IEnumerable<T> source) =>
         source.Select((item, index) => (item, index));
 

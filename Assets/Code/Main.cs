@@ -132,6 +132,7 @@ Clips: {audiocraft.Clips:0000}
             var inputs = new bool[4];
             while (true)
             {
+                arduino.Set(arrows.None(arrow => arrow.Hidden));
                 Utility.Or(_inputs.Buttons, _inputs.Arrows, inputs);
                 UpdateIcon(Left, arrows, speed, 1, inputs, position => position.With(x: 0f), position => position.With(x: -view.width / 2 - 64), position => position.With(x: -view.width * 8));
                 UpdateIcon(Right, arrows, speed, 0, inputs, position => position.With(x: 0f), position => position.With(x: view.width / 2 + 64), position => position.With(x: view.width * 8));
@@ -292,6 +293,6 @@ Clips: {audiocraft.Clips:0000}
         _inputs.Minus = Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus) || Input.GetKeyDown(KeyCode.Underscore);
         _inputs.Tab = Input.GetKeyDown(KeyCode.Tab);
         _inputs.Shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-        _inputs.Space = Input.GetKeyDown(KeyCode.Space);
+        _inputs.Space = Input.GetKey(KeyCode.Space);
     }
 }
