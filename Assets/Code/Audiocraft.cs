@@ -25,9 +25,6 @@ public sealed class Audiocraft
         public string Description = "";
         public bool Loop;
         public bool Empty;
-        public int Offset;
-        public int Size;
-        public int Generation;
         public float Duration;
         public float Overlap;
         public string[] Prompts = Array.Empty<string>();
@@ -42,9 +39,6 @@ public sealed class Audiocraft
 ""description"":""{Description.Escape()}"",
 ""loop"":{(Loop ? "True" : "False")},
 ""empty"":{(Empty ? "True" : "False")},
-""offset"":{Offset},
-""size"":{Size},
-""generation"":{Generation},
 ""duration"":{Duration},
 ""overlap"":{Overlap},
 ""prompts"":[{string.Join(",", Prompts.Select(prompt => $@"""{prompt.Escape()}"""))}],
@@ -83,9 +77,6 @@ public sealed class Audiocraft
         public int Channels;
         public int Index;
         public int Count;
-        public int Offset;
-        public int Size;
-        public int Generation;
         public byte[] Data = Array.Empty<byte>();
         public float Duration => (float)Samples / Rate;
     }
@@ -98,9 +89,6 @@ public sealed class Audiocraft
         public int Rate;
         public int Samples;
         public int Channels;
-        public int Offset;
-        public int Size;
-        public int Generation;
         public string Description = "";
         public byte[] Data = Array.Empty<byte>();
         public float Duration => (float)Samples / Rate;
@@ -222,7 +210,7 @@ public sealed class Audiocraft
         }
     }
 
-    public void WriteClips(string prompt, Icon? icon, string? data)
+    public void WriteClips(string prompt, string? data)
     {
         var cancel = 0;
         if (_requests.TryRemove((Tags.Clip, true), out var request)) _cancel.Add(cancel = request.Version);
@@ -234,10 +222,7 @@ public sealed class Audiocraft
             Loop = true,
             Duration = 10f,
             Overlap = 0.5f,
-            Offset = icon?.Offset ?? 0,
-            Size = icon?.Size ?? 0,
-            Generation = icon?.Generation ?? 0,
-            Empty = true, // If the sound could not be loaded (ex: overwritten), allow generation from scratch.
+            Empty = true,
             Cancel = new[] { cancel },
             Prompts = new[] { prompt },
             Data = data ?? "",
@@ -272,30 +257,25 @@ public sealed class Audiocraft
                 var response = JsonUtility.FromJson<Response>(line);
                 Log($"Received output: {response}");
                 var tags = (Tags)response.tags;
-                var offset = response.offset;
-                var size = response.size / response.count;
                 _requests.TryRemove((tags, false), out var __);
                 if (tags.HasFlag(Tags.Clip))
                 {
-                    var clip = new Clip
+                    var index = 0;
+                    await foreach (var data in _memory.Read(response.offset, response.size, response.count))
                     {
-                        Version = response.version,
-                        Tags = tags,
-                        Size = size,
-                        Rate = response.rate,
-                        Overlap = response.overlap,
-                        Samples = response.samples,
-                        Channels = response.channels,
-                        Count = response.count,
-                        Generation = response.generation,
-                    };
-                    for (int i = 0; i < response.count; i++, offset += size)
-                        _clips.Enqueue(clip with
+                        _clips.Enqueue(new()
                         {
-                            Index = i,
-                            Offset = offset,
-                            Data = await _memory.Read(offset, size),
+                            Version = response.version,
+                            Tags = tags,
+                            Rate = response.rate,
+                            Overlap = response.overlap,
+                            Samples = response.samples,
+                            Channels = response.channels,
+                            Count = response.count,
+                            Index = index++,
+                            Data = data
                         });
+                    }
                 }
                 else if (tags.HasFlag(Tags.Icon))
                 {
@@ -303,14 +283,11 @@ public sealed class Audiocraft
                     {
                         Version = response.version,
                         Tags = tags,
-                        Offset = offset,
-                        Size = size,
                         Rate = response.rate,
                         Samples = response.samples,
                         Channels = response.channels,
-                        Generation = response.generation,
                         Description = response.description,
-                        Data = await _memory.Read(offset, size),
+                        Data = await _memory.Read(response.offset, response.size),
                     });
                 }
             }
@@ -341,19 +318,13 @@ public sealed class Audiocraft
 
     void Load(Clip clip, ref AudioClip? audio)
     {
-        if (clip.Data.Length > 0)
-            Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
-        else
-            Load(clip.Rate, clip.Samples, clip.Channels, clip.Offset, clip.Size, _memory, ref audio);
+        Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
         Pool<byte>.Put(ref clip.Data);
     }
 
     void Load(Icon icon, ref AudioClip? audio)
     {
-        if (icon.Data.Length > 0)
-            Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
-        else
-            Load(icon.Rate, icon.Samples, icon.Channels, icon.Offset, icon.Size, _memory, ref audio);
+        Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
         Pool<byte>.Put(ref icon.Data);
     }
 

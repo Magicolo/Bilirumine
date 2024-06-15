@@ -36,9 +36,6 @@ public sealed class Comfy
         public Tags Tags;
         public int Width;
         public int Height;
-        public int Offset;
-        public int Size;
-        public int Generation;
         public (int width, int height) Shape;
         public int Left;
         public int Right;
@@ -69,9 +66,6 @@ public sealed class Comfy
 ""description"":""{Description.Escape()}"",
 ""width"":{Width},
 ""height"":{Height},
-""offset"":{Offset},
-""size"":{Size},
-""generation"":{Generation},
 ""shape"":({Shape.height}, {Shape.width}),
 ""left"":{Left},
 ""right"":{Right},
@@ -114,13 +108,10 @@ public sealed class Comfy
     {
         public int Version;
         public Tags Tags;
-        public int Generation;
         public int Index;
         public int Count;
         public int Width;
         public int Height;
-        public int Offset;
-        public int Size;
         public byte[] Data = Array.Empty<byte>();
     }
 
@@ -129,11 +120,8 @@ public sealed class Comfy
     {
         public int Version;
         public Tags Tags;
-        public int Generation;
         public int Width;
         public int Height;
-        public int Offset;
-        public int Size;
         public string Description = "";
         public byte[] Data = Array.Empty<byte>();
     }
@@ -249,11 +237,16 @@ public sealed class Comfy
             if (_play && _frames.TryDequeue(out var frame))
             {
                 if (_cancel.Contains(frame.Version)) continue;
-                else _last = frame;
+                else
+                {
+                    var last = _last;
+                    _last = frame;
+                    Pool<byte>.Put(ref last.Data);
+                }
 
                 while (Time.time - time < _delta.wait / _delta.speed) yield return null;
                 time += _delta.wait / _delta.speed;
-                Load(frame, image, ref load);
+                Load(frame.Width, frame.Height, frame.Data, image, ref load);
                 (main, load) = (load, main);
                 _resolution = (frame.Width, frame.Height);
             }
@@ -311,30 +304,23 @@ public sealed class Comfy
                 var response = JsonUtility.FromJson<Response>(line);
                 Log($"Received output: {response}");
                 var tags = (Tags)response.tags;
-                var offset = response.offset;
-                var size = response.size / response.count;
                 _requests.TryRemove((tags, false), out var __);
                 if (tags.HasFlag(Tags.Begin)) _begin = response.version;
                 if (tags.HasFlag(Tags.End)) _end = response.version;
                 if (tags.HasFlag(Tags.Frame))
                 {
-                    var frame = new Frame
+                    var index = 0;
+                    await foreach (var data in _memory.Read(response.offset, response.size, response.count))
                     {
-                        Version = response.version,
-                        Generation = response.generation,
-                        Count = response.count,
-                        Width = response.width,
-                        Height = response.height,
-                        Size = size,
-                        Tags = tags,
-                    };
-                    for (int i = 0; i < response.count; i++, offset += size)
-                    {
-                        _frames.Enqueue(frame with
+                        _frames.Enqueue(new()
                         {
-                            Index = i,
-                            Offset = offset,
-                            Data = await _memory.Read(offset, size)
+                            Version = response.version,
+                            Tags = tags,
+                            Count = response.count,
+                            Width = response.width,
+                            Height = response.height,
+                            Index = index++,
+                            Data = data
                         });
                         var now = watch.Elapsed;
                         if (_deltas.images.TryDequeue(out var ___)) _deltas.images.Enqueue(now - then.image);
@@ -352,13 +338,10 @@ public sealed class Comfy
                     {
                         Version = response.version,
                         Tags = tags,
-                        Offset = offset,
-                        Size = size,
-                        Generation = response.generation,
                         Width = response.width,
                         Height = response.height,
                         Description = response.description,
-                        Data = await _memory.Read(offset, size),
+                        Data = await _memory.Read(response.offset, response.size),
                     });
                 }
             }
@@ -450,10 +433,8 @@ public sealed class Comfy
         if (store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
         if (request.Continue && _last is { } last) request = request with
         {
-            Offset = last.Offset,
-            Size = last.Size,
-            Generation = last.Generation,
             Shape = (last.Width, last.Height),
+            Data = Convert.ToBase64String(last.Data),
         };
 
         try
@@ -469,20 +450,8 @@ public sealed class Comfy
 
     void Load(Icon icon, Image image, ref Texture2D? texture)
     {
-        if (icon.Data.Length > 0)
-            Load(icon.Width, icon.Height, icon.Data, image, ref texture);
-        else
-            Load(icon.Width, icon.Height, icon.Offset, icon.Size, _memory, image, ref texture);
+        Load(icon.Width, icon.Height, icon.Data, image, ref texture);
         Pool<byte>.Put(ref icon.Data);
-    }
-
-    void Load(Frame frame, Image image, ref Texture2D? texture)
-    {
-        if (frame.Data.Length > 0)
-            Load(frame.Width, frame.Height, frame.Data, image, ref texture);
-        else
-            Load(frame.Width, frame.Height, frame.Offset, frame.Size, _memory, image, ref texture);
-        Pool<byte>.Put(ref frame.Data);
     }
 
     IEnumerable Loop()

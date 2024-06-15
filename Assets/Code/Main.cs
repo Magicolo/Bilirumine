@@ -124,7 +124,7 @@ Clips: {audiocraft.Clips:0000}
             var positive = entry?.Positive ?? string.Join(", ", Inspire.Image.Random(25));
             var prompt = entry?.Prompt ?? string.Join(", ", Inspire.Sound.Random(10));
             comfy.WriteFrames(positive, entry?.Width, entry?.Height, entry?.Image);
-            audiocraft.WriteClips(prompt, null, entry?.Sound);
+            audiocraft.WriteClips(prompt, entry?.Sound);
             var bloom = Bloom.GetSetting<Bloom>();
             var previous = GenerateIcons(0, 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
             var view = Canvas.LocalRectangle();
@@ -158,7 +158,7 @@ Clips: {audiocraft.Clips:0000}
                         Utility.Log(nameof(Main), $"Begin choice '{choice}'.");
                         break;
                     // End choice.
-                    case ({ Icons: ({ } image, { } sound), Color: var color } chosen, var moving) when chosen == moving && comfy.Has(begin: choice.version):
+                    case ({ Audio: { } audio, Icons: ({ } image, { } sound), Color: var color } chosen, var moving) when chosen == moving && comfy.Has(begin: choice.version):
                         Utility.Log(nameof(Main), $"End choice '{choice}'.");
                         Flash.color = color.Color(0.25f);
                         bloom.intensity.value = 25f;
@@ -169,7 +169,7 @@ Clips: {audiocraft.Clips:0000}
                         comfy.Set(play: true);
                         comfy.WriteEnd();
                         audiocraft.Set(motion: -1f);
-                        audiocraft.WriteClips(choice.prompt, sound, null);
+                        audiocraft.WriteClips(choice.prompt, Convert.ToBase64String(audio.GetRawData()));
                         positive = choice.positive;
                         prompt = choice.prompt;
                         previous = GenerateIcons(choice.version, Array.IndexOf(arrows, chosen), previous);
@@ -266,8 +266,8 @@ Clips: {audiocraft.Clips:0000}
             await File.AppendAllLinesAsync(_history, new[] { JsonUtility.ToJson(new Entry
             {
                 Date = DateTime.UtcNow.Ticks,
-                Image = arrow.Texture == null ? "" : Convert.ToBase64String(arrow.Texture.GetRawTextureData()),
-                Sound = arrow.Sound == null ? "" : Convert.ToBase64String(arrow.Sound.clip.GetRawData()),
+                Image = image.Data.Length > 0 ? Convert.ToBase64String(image.Data) : arrow.Texture == null ? "" : Convert.ToBase64String(arrow.Texture.GetRawTextureData()),
+                Sound = sound.Data.Length > 0 ? Convert.ToBase64String(sound.Data) :arrow.Audio == null ? "" : Convert.ToBase64String(arrow.Audio.GetRawData()),
                 Color = arrow.Color,
                 Width = image.Width,
                 Height = image.Height,

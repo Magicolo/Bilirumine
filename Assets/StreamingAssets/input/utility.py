@@ -1,4 +1,4 @@
-import sys, threading, ast, random, mmap, os, time
+import sys, threading, ast, random, mmap, os, time, fcntl
 from queue import SimpleQueue, Empty
 from typing import Optional, Tuple
 
@@ -7,13 +7,18 @@ class Memory:
 
     def __init__(self, name: str, align: int = 8, capacity: int = 2**31 - 1):
         self.capacity = capacity
-        self.lock = f"/input/{name}.lock"
+        self.lock = open(f"/input/{name}.lock", "w+")
         self.next = 0
         self.align = align
         self.generation = 1
         with open(f"/dev/shm/bilirumine_{name}", "r+b") as file:
             self.memory = mmap.mmap(file.fileno(), capacity, access=mmap.ACCESS_WRITE)
-        self._release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self):
+        self.close()
 
     def read(self, offset: int, size: int, generation: int) -> Optional[bytes]:
         if size <= 0 or offset < 0 or offset + size > self.capacity:
@@ -53,22 +58,22 @@ class Memory:
         finally:
             self._release()
 
+    def close(self):
+        self.lock.close()
+
     def _acquire(self):
-        while True:
-            for _ in range(10):
-                for _ in range(10):
-                    try:
-                        return os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                    except FileExistsError:
-                        pass
-                time.sleep(0)
-            time.sleep(0.001)
+        fcntl.lockf(self.lock, fcntl.LOCK_EX)
+        if DEBUG:
+            self.lock.seek(0, os.SEEK_END)
+            self.lock.write(f"[{time.time()}] Python ACQUIRE\n")
+            self.lock.flush()
 
     def _release(self):
-        try:
-            os.remove(self.lock)
-        except FileNotFoundError:
-            pass
+        if DEBUG:
+            self.lock.seek(0, os.SEEK_END)
+            self.lock.write(f"[{time.time()}] Python RELEASE\n")
+            self.lock.flush()
+        fcntl.lockf(self.lock, fcntl.LOCK_UN)
 
 
 def seed():
@@ -143,6 +148,7 @@ def update(cancel, pause, resume):
     if cancel or resume:
         PAUSE = PAUSE.difference(cancel + resume)
 
+DEBUG = False
 WAIT = 0.1
 PAUSE = set()
 CANCEL = set()

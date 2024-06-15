@@ -20,14 +20,8 @@ from nodes import (
 
 
 def load(state: dict):
-    if state["size"] and state["generation"]:
-        data = MEMORY.read(state["offset"], state["size"], state["generation"])
-    elif state["data"]:
+    if state["data"]:
         data = base64.b64decode(state["data"])
-    else:
-        data = None
-
-    if data is not None:
         loaded = torch.frombuffer(bytearray(data), dtype=torch.uint8)
         loaded = loaded.to(dtype=torch.float32)
         loaded = loaded / 255.0
@@ -243,20 +237,20 @@ def write(receive: SimpleQueue):
             utility.output(response)
 
 
-MEMORY = Memory("image")
-init_custom_nodes()
-a = SimpleQueue()
-b = SimpleQueue()
-c = SimpleQueue()
-d = SimpleQueue()
-threads = [
-    threading.Thread(target=read, args=(a,)),
-    threading.Thread(target=extend, args=(a, b)),
-    threading.Thread(target=detail, args=(b, c, a)),
-    threading.Thread(target=interpolate, args=(c, d)),
-    threading.Thread(target=write, args=(d,)),
-]
-for thread in threads:
-    thread.start()
-for thread in threads:
-    thread.join()
+with Memory("image") as MEMORY:
+    init_custom_nodes()
+    a = SimpleQueue()
+    b = SimpleQueue()
+    c = SimpleQueue()
+    d = SimpleQueue()
+    threads = [
+        threading.Thread(target=read, args=(a,)),
+        threading.Thread(target=extend, args=(a, b)),
+        threading.Thread(target=detail, args=(b, c, a)),
+        threading.Thread(target=interpolate, args=(c, d)),
+        threading.Thread(target=write, args=(d,)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()

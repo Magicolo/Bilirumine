@@ -183,8 +183,8 @@ public static class Utility
         }
     }
 
-    public static void Log(string name, string message) => Debug.Log($"[{DateTime.Now}] {name.ToUpperInvariant()}(log): {message}".Truncate(5000));
-    public static void Warn(string name, string message) => Debug.LogWarning($"[{DateTime.Now}] {name.ToUpperInvariant()}(warn): {message}".Truncate(5000));
-    public static void Error(string name, string message) => Debug.LogError($"[{DateTime.Now}] {name.ToUpperInvariant()}(error): {message}".Truncate(5000));
-    public static void Except(string name, Exception exception) => Debug.LogException(new Exception($"[{DateTime.Now}] {name.ToUpperInvariant()}(except): {exception.Message}".Truncate(5000), exception));
+    public static void Log(string name, string message) => Debug.Log($"[{DateTime.Now}] <LOG> {name.ToUpperInvariant()}: {message}".Truncate(5000));
+    public static void Warn(string name, string message) => Debug.LogWarning($"[{DateTime.Now}] <WARN> {name.ToUpperInvariant()}: {message}".Truncate(5000));
+    public static void Error(string name, string message) => Debug.LogError($"[{DateTime.Now}] <ERROR> {name.ToUpperInvariant()}: {message}".Truncate(5000));
+    public static void Except(string name, Exception exception) => Debug.LogException(new Exception($"[{DateTime.Now}] <EXCEPT> {name.ToUpperInvariant()}: {exception.Message}".Truncate(5000), exception));
 }

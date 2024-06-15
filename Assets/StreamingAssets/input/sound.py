@@ -7,14 +7,8 @@ from audiocraft.models import MusicGen
 
 
 def load(state: dict):
-    if state["size"] and state["generation"]:
-        data = MEMORY.read(state["offset"], state["size"], state["generation"])
-    elif state["data"]:
+    if state["data"]:
         data = base64.b64decode(state["data"])
-    else:
-        data = None
-
-    if data is not None:
         loaded = torch.frombuffer(bytearray(data), dtype=torch.float32)
         loaded = loaded.reshape(1, 1, len(loaded))
         return loaded
@@ -84,16 +78,16 @@ def write(receive: SimpleQueue):
         utility.output(response)
 
 
-RATE = 32000
-MEMORY = Memory("sound")
-a = SimpleQueue()
-b = SimpleQueue()
-threads = [
-    threading.Thread(target=read, args=(a,)),
-    threading.Thread(target=process, args=(a, b)),
-    threading.Thread(target=write, args=(b,)),
-]
-for thread in threads:
-    thread.start()
-for thread in threads:
-    thread.join()
+with Memory("sound") as MEMORY:
+    RATE = 32000
+    a = SimpleQueue()
+    b = SimpleQueue()
+    threads = [
+        threading.Thread(target=read, args=(a,)),
+        threading.Thread(target=process, args=(a, b)),
+        threading.Thread(target=write, args=(b,)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
