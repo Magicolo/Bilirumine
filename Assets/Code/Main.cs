@@ -83,7 +83,7 @@ public sealed class Main : MonoBehaviour
         StartCoroutine(UpdateState());
         StartCoroutine(UpdateDebug());
 
-        foreach (var item in Utility.Wait(comfy.Read(), audiocraft.Read(), arduino.Read(_inputs.Buttons)))
+        foreach (var item in Utility.Wait(comfy.Read(), comfy.Write(), audiocraft.Read(), audiocraft.Write(), arduino.Read(_inputs.Buttons)))
         {
             Cursor.visible = Application.isEditor;
             yield return item;
@@ -126,12 +126,10 @@ Clips: {audiocraft.Clips:0000}
             var styles = Utility.Styles("ultra detailed", "hyper realistic", "complex", "dense", "sharp");
             var positive = entry?.Positive ?? string.Join(", ", Inspire.Image.Random(25));
             var prompt = entry?.Prompt ?? string.Join(", ", Inspire.Sound.Random(10));
-            var choice = (version: Task.FromResult(0), positive, prompt, chosen: default(Arrow));
-            var previous = GenerateIcons(Task.FromResult(0), 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
-            foreach (var item in Utility.Wait(
-                comfy.WriteFrames(positive, entry?.Width, entry?.Height, Convert.FromBase64String(entry?.Image ?? "")),
-                audiocraft.WriteClips(prompt, Convert.FromBase64String(entry?.Sound ?? ""))))
-                yield return item;
+            var choice = (version: 0, positive, prompt, chosen: default(Arrow));
+            var previous = GenerateIcons(0, 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
+            comfy.WriteFrames(positive, entry?.Width, entry?.Height, Convert.FromBase64String(entry?.Image ?? ""));
+            audiocraft.WriteClips(prompt, Convert.FromBase64String(entry?.Sound ?? ""));
 
             while (true)
             {
@@ -162,7 +160,7 @@ Clips: {audiocraft.Clips:0000}
                         break;
                     // End choice.
                     case ({ Audio: { } audio, Icons: ({ } image, { } sound), Color: var color } chosen, var moving)
-                        when chosen == moving && choice.version.IsCompleted && comfy.Has(begin: choice.version.Result):
+                        when chosen == moving && comfy.Has(begin: choice.version):
                         Utility.Log(nameof(Main), $"End choice '{choice}'.");
                         Flash.color = color.Color(0.25f);
                         bloom.intensity.value = 25f;
@@ -174,9 +172,10 @@ Clips: {audiocraft.Clips:0000}
                         audiocraft.Set(motion: -1f);
                         positive = choice.positive;
                         prompt = choice.prompt;
-                        foreach (var item in Utility.Wait(audiocraft.WriteClips(choice.prompt, sound.Data), comfy.WriteEnd())) yield return item;
+                        comfy.WriteEnd();
+                        audiocraft.WriteClips(choice.prompt, sound.Data);
                         previous = GenerateIcons(choice.version, Array.IndexOf(arrows, chosen), previous);
-                        choice = (Task.FromResult(0), positive, prompt, null);
+                        choice = (0, positive, prompt, null);
                         foreach (var arrow in arrows) arrow.Hide();
                         _ = Save(chosen, image, sound, positive, prompt);
                         break;
@@ -198,8 +197,8 @@ Clips: {audiocraft.Clips:0000}
                         Utility.Log(nameof(Main), $"Cancel choice '{choice}'.");
                         Rumble.Stop();
                         comfy.Set(play: true);
-                        foreach (var item in Utility.Wait(comfy.WriteCancel(choice.version))) yield return item;
-                        choice = (Task.FromResult(0), positive, prompt, null);
+                        comfy.WriteCancel(choice.version);
+                        choice = (0, positive, prompt, null);
                         break;
                     case (null, null):
                         comfy.Set(play: true);
@@ -216,13 +215,13 @@ Clips: {audiocraft.Clips:0000}
                 yield return null;
             }
 
-            Task<Ollama.Generation[]> GenerateIcons(Task<int> version, int index, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
+            Task<Ollama.Generation[]> GenerateIcons(int version, int index, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
             {
                 var random = new System.Random();
                 var generations = await previous;
                 var generation = await ollama.Generate(arrow.Color, generations.At(index));
                 await Task.WhenAll(
-                    comfy.WriteIcon(arrow, await version, generation.Image),
+                    comfy.WriteIcon(arrow, version, generation.Image),
                     audiocraft.WriteIcon(arrow, generation.Sound));
                 return generation;
             }));

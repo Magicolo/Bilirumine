@@ -47,6 +47,7 @@ public sealed class Comfy
         public float Guidance;
         public float Denoise;
         public bool Continue;
+        public bool Store;
         public int[] Cancel = Array.Empty<int>();
         public int[] Pause = Array.Empty<int>();
         public int[] Resume = Array.Empty<int>();
@@ -137,6 +138,7 @@ public sealed class Comfy
         Denoise = 0.7f,
         Zoom = 64,
         Loop = true,
+        Store = true,
         Interpolations = new[] { (0.25f, 10), (1f, 10) },
         Negative = _negative,
     };
@@ -149,6 +151,7 @@ public sealed class Comfy
         Guidance = 6f,
         Denoise = 0.4f,
         Continue = true,
+        Store = true,
         Interpolations = new[] { (0.25f, 10), (0.5f, 10) },
         Negative = _negative,
     };
@@ -160,6 +163,7 @@ public sealed class Comfy
         Steps = 5,
         Guidance = 6f,
         Denoise = 0.7f,
+        Store = true,
         Negative = _negative,
     };
 
@@ -222,6 +226,7 @@ public sealed class Comfy
     readonly ConcurrentQueue<Frame> _frames = new();
     readonly ConcurrentQueue<Icon> _icons = new();
     readonly HashSet<int> _cancel = new();
+    readonly ConcurrentQueue<Request> _pending = new();
     readonly ConcurrentDictionary<(Tags tags, bool loop), Request> _requests = new();
 
     public void Set(bool? play = null) => _play = play ?? _play;
@@ -352,12 +357,38 @@ public sealed class Comfy
         }
     }
 
-    public async Task WriteFrames(string positive, int? width, int? height, byte[]? data)
+    public async Task Write()
+    {
+        foreach (var _ in Loop())
+        {
+            if (_pending.TryDequeue(out var request))
+            {
+                if (request.Store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
+                if (request.Continue && _last is { } last) request = request with
+                {
+                    Shape = (last.Width, last.Height),
+                    Data = last.Data,
+                };
+
+                try
+                {
+                    var line = $"{request}";
+                    Log($"Sending input '{line}'.");
+                    var input = _process.StandardInput;
+                    await input.WriteLineAsync(line);
+                    await input.FlushAsync();
+                }
+                catch (Exception exception) { Except(exception); }
+            }
+            else await Task.Delay(1);
+        }
+    }
+
+    public void WriteFrames(string positive, int? width, int? height, byte[]? data)
     {
         var cancel = 0;
         if (_requests.TryRemove((_frame.Tags, true), out var request)) _cancel.Add(cancel = request.Version);
-
-        await Write(_frame with
+        _pending.Enqueue(_frame with
         {
             Version = Request.Reserve(),
             Data = data ?? Array.Empty<byte>(),
@@ -365,10 +396,10 @@ public sealed class Comfy
             Shape = (width ?? 0, height ?? 0),
             Positive = positive,
             Cancel = new[] { cancel },
-        }, true);
+        });
     }
 
-    public async Task<int> WriteBegin(Arrow arrow, (string from, string to) positives)
+    public int WriteBegin(Arrow arrow, (string from, string to) positives)
     {
         var pause = 0;
         if (_requests.TryGetValue((_frame.Tags, true), out var request)) pause = request.Version;
@@ -383,71 +414,45 @@ public sealed class Comfy
             Top = Math.Max(arrow.Direction.y, 0),
             Bottom = Math.Max(-arrow.Direction.y, 0),
         };
-        await Write(Request.Sequence(
+        _pending.Enqueue(Request.Sequence(
             template with { Tags = template.Tags | Tags.Begin, Positive = positives.from },
             template with { Tags = template.Tags, Positive = $"{positives.from} {positives.to}" },
             template with { Tags = template.Tags, Positive = $"{positives.to} {positives.from}" },
             template with { Tags = template.Tags | Tags.End, Positive = positives.to },
             _frame with { Version = version, Positive = positives.to, Continue = true }
-        ), true);
+        ));
         return version;
     }
 
-    public async Task WriteEnd()
+    public void WriteEnd()
     {
         var cancel = 0;
         if (_requests.TryRemove((_frame.Tags, true), out var request))
             _cancel.Add(cancel = request.Version);
         if (_requests.TryRemove((_move.Tags | Tags.Begin, true), out request) && request.Last with { Empty = true } is { } last)
             _requests.AddOrUpdate((last.Tags, true), last, (_, _) => last);
-        await Write(new() { Version = Request.Reserve(), Cancel = new[] { cancel } }, false);
+        _pending.Enqueue(new() { Version = Request.Reserve(), Cancel = new[] { cancel } });
     }
 
-    public async Task WriteCancel(Task<int> version)
+    public void WriteCancel(int version)
     {
-        var cancel = await version;
         var resume = 0;
         if (_requests.TryGetValue((_frame.Tags, true), out var request)) resume = request.Version;
-        _cancel.Add(cancel);
-        await Write(new() { Version = Request.Reserve(), Resume = new[] { resume }, Cancel = new[] { cancel } }, false);
+        _cancel.Add(version);
+        _pending.Enqueue(new() { Version = Request.Reserve(), Resume = new[] { resume }, Cancel = new[] { version } });
     }
 
     public async Task WriteIcon(Arrow arrow, int version, string positive)
     {
         for (int i = 0; i < 256 && _end < version; i++) await Task.Delay(100);
-        await Write(_icon with
+        _pending.Enqueue(_icon with
         {
             Version = Request.Reserve(),
             Tags = _icon.Tags | arrow.Tags,
             Load = $"{arrow.Color}.png".ToLowerInvariant(),
             Positive = $"{Utility.Styles("icon", "close up", "huge", "simple", "minimalistic", "figurative")} ({arrow.Color}) {positive}",
             Description = positive,
-        }, true);
-    }
-
-    async Task Write(Request request, bool store)
-    {
-        foreach (var _ in Loop()) if (await TryWrite(request, store)) break;
-    }
-
-    async Task<bool> TryWrite(Request request, bool store)
-    {
-        if (store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
-        if (request.Continue && _last is { } last) request = request with
-        {
-            Shape = (last.Width, last.Height),
-            Data = last.Data,
-        };
-
-        try
-        {
-            Log($"Sending input '{request}'.");
-            await _process.StandardInput.WriteLineAsync($"{request}");
-            await _process.StandardInput.FlushAsync();
-            return true;
-        }
-        catch (Exception exception) { Except(exception); }
-        return false;
+        });
     }
 
     IEnumerable Loop()
@@ -463,7 +468,7 @@ public sealed class Comfy
                         Warn("Restarting docker container.");
                         _process = Utility.Docker("comfy");
                         foreach (var pair in _requests.OrderBy(pair => pair.Value.Version))
-                            TryWrite(pair.Value, true).Wait();
+                            _pending.Enqueue(pair.Value);
                     }
                 }
             }

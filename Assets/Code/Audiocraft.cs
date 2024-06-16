@@ -25,6 +25,7 @@ public sealed class Audiocraft
         public string Description = "";
         public bool Loop;
         public bool Empty;
+        public bool Store;
         public float Duration;
         public float Overlap;
         public string[] Prompts = Array.Empty<string>();
@@ -94,6 +95,23 @@ public sealed class Audiocraft
         public float Duration => (float)Samples / Rate;
     }
 
+    static readonly Request _clip = new()
+    {
+        Tags = Tags.Clip,
+        Loop = true,
+        Store = true,
+        Duration = 10f,
+        Overlap = 0.5f,
+        Empty = true,
+    };
+    static readonly Request _icon = new()
+    {
+        Tags = Tags.Icon,
+        Duration = 10f,
+        Empty = true,
+        Store = true,
+    };
+
     public unsafe static bool Load(int rate, int samples, int channels, int offset, int size, Memory memory, ref AudioClip? audio)
     {
         if (audio == null || audio.samples != samples || audio.channels != channels)
@@ -124,6 +142,7 @@ public sealed class Audiocraft
     readonly Memory _memory = Utility.Memory("sound");
     readonly ConcurrentQueue<Clip> _clips = new();
     readonly ConcurrentQueue<Icon> _icons = new();
+    readonly ConcurrentQueue<Request> _pending = new();
     readonly ConcurrentDictionary<(Tags tags, bool loop), Request> _requests = new();
     readonly HashSet<int> _cancel = new();
     readonly object _lock = new();
@@ -198,61 +217,24 @@ public sealed class Audiocraft
 
     public IEnumerator UpdatePause()
     {
-        foreach (var outer in Loop())
+        foreach (var item in Loop())
         {
             if (_requests.TryGetValue((Tags.Clip, true), out var request))
             {
                 switch (_pause, _clips.Count(clip => clip.Version == request.Version))
                 {
                     case (false, > 5):
-                        foreach (var inner in Utility.Wait(Write(new() { Version = Request.Reserve(), Pause = new[] { request.Version } }, false)))
-                            yield return inner;
+                        _pending.Enqueue(new() { Version = Request.Reserve(), Pause = new[] { request.Version } });
                         _pause = true;
                         break;
                     case (true, < 5):
-                        foreach (var inner in Utility.Wait(Write(new() { Version = Request.Reserve(), Resume = new[] { request.Version } }, false)))
-                            yield return inner;
+                        _pending.Enqueue(new() { Version = Request.Reserve(), Resume = new[] { request.Version } });
                         _pause = false;
                         break;
                 }
             }
-            yield return outer;
+            yield return item;
         }
-    }
-
-    public async Task WriteClips(string prompt, byte[]? data)
-    {
-        var cancel = 0;
-        if (_requests.TryRemove((Tags.Clip, true), out var request)) _cancel.Add(cancel = request.Version);
-        await Write(new()
-        {
-            Version = Request.Reserve(),
-            Tags = Tags.Clip,
-            Loop = true,
-            Duration = 10f,
-            Overlap = 0.5f,
-            Empty = true,
-            Cancel = new[] { cancel },
-            Prompts = new[] { prompt },
-            Data = data ?? Array.Empty<byte>(),
-        }, true);
-    }
-
-    public async Task WriteIcon(Arrow arrow, string description)
-    {
-        for (int i = 0; i < 256 && _clips.Count < 5; i++) await Task.Delay(100);
-        var version = Request.Reserve();
-        var tags = Tags.Icon | arrow.Tags;
-        var prompt = $"{Utility.Styles("punchy", "jingle", "stinger", "notification")} ({arrow.Color}) {description}";
-        await Write(new()
-        {
-            Version = version,
-            Tags = tags,
-            Duration = 10f,
-            Empty = true,
-            Prompts = new[] { prompt },
-            Description = description,
-        }, true);
     }
 
     public async Task Read()
@@ -306,23 +288,52 @@ public sealed class Audiocraft
         }
     }
 
-    async Task Write(Request request, bool store)
+    public async Task Write()
     {
-        foreach (var _ in Loop()) if (await TryWrite(request, store)) break;
+        foreach (var _ in Loop())
+        {
+            if (_pending.TryDequeue(out var request))
+            {
+                if (request.Store) _requests.AddOrUpdate((request.Tags, request.Loop), request, (_, _) => request);
+                try
+                {
+                    var line = $"{request}";
+                    Log($"Sending input '{line}'.");
+                    var input = _process.StandardInput;
+                    await input.WriteLineAsync(line);
+                    await input.FlushAsync();
+                }
+                catch (Exception exception) { Except(exception); }
+            }
+            else await Task.Delay(1);
+        }
     }
 
-    async Task<bool> TryWrite(Request request, bool store)
+    public void WriteClips(string prompt, byte[]? data)
     {
-        if (store) _requests.AddOrUpdate((request.Tags, request.Loop), request, (_, _) => request);
-        try
+        var cancel = 0;
+        if (_requests.TryRemove((Tags.Clip, true), out var request)) _cancel.Add(cancel = request.Version);
+        _pending.Enqueue(_clip with
         {
-            Log($"Sending input '{request}'.");
-            await _process.StandardInput.WriteLineAsync($"{request}");
-            await _process.StandardInput.FlushAsync();
-            return true;
-        }
-        catch (Exception exception) { Except(exception); }
-        return false;
+            Version = Request.Reserve(),
+            Cancel = new[] { cancel },
+            Prompts = new[] { prompt },
+            Data = data ?? Array.Empty<byte>(),
+        });
+    }
+
+    public async Task WriteIcon(Arrow arrow, string description)
+    {
+        for (int i = 0; i < 256 && _clips.Count < 5; i++) await Task.Delay(100);
+        var version = Request.Reserve();
+        var prompt = $"{Utility.Styles("punchy", "jingle", "stinger", "notification")} ({arrow.Color}) {description}";
+        _pending.Enqueue(_icon with
+        {
+            Version = version,
+            Tags = _icon.Tags | arrow.Tags,
+            Prompts = new[] { prompt },
+            Description = description,
+        });
     }
 
     IEnumerable Loop()
@@ -338,7 +349,7 @@ public sealed class Audiocraft
                         Warn("Restarting docker container.");
                         _process = Utility.Docker("audiocraft");
                         foreach (var pair in _requests.OrderBy(pair => pair.Value.Version))
-                            TryWrite(pair.Value, true).Wait();
+                            _pending.Enqueue(pair.Value);
                     }
                 }
             }
