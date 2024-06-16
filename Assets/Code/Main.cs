@@ -120,16 +120,19 @@ Clips: {audiocraft.Clips:0000}
             foreach (var item in Utility.Wait(task)) yield return item;
             var entry = task.Result;
             var speed = 3.75f;
+            var bloom = Bloom.GetSetting<Bloom>();
+            var view = Canvas.LocalRectangle();
+            var inputs = new bool[4];
             var styles = Utility.Styles("ultra detailed", "hyper realistic", "complex", "dense", "sharp");
             var positive = entry?.Positive ?? string.Join(", ", Inspire.Image.Random(25));
             var prompt = entry?.Prompt ?? string.Join(", ", Inspire.Sound.Random(10));
-            comfy.WriteFrames(positive, entry?.Width, entry?.Height, entry?.Image);
-            audiocraft.WriteClips(prompt, entry?.Sound);
-            var bloom = Bloom.GetSetting<Bloom>();
-            var previous = GenerateIcons(0, 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
-            var view = Canvas.LocalRectangle();
-            var choice = (version: 0, positive, prompt, chosen: default(Arrow));
-            var inputs = new bool[4];
+            var choice = (version: Task.FromResult(0), positive, prompt, chosen: default(Arrow));
+            var previous = GenerateIcons(Task.FromResult(0), 0, Task.FromResult(Array.Empty<Ollama.Generation>()));
+            foreach (var item in Utility.Wait(
+                comfy.WriteFrames(positive, entry?.Width, entry?.Height, Convert.FromBase64String(entry?.Image ?? "")),
+                audiocraft.WriteClips(prompt, Convert.FromBase64String(entry?.Sound ?? ""))))
+                yield return item;
+
             while (true)
             {
                 arduino.Set(arrows.None(arrow => arrow.Hidden));
@@ -158,7 +161,8 @@ Clips: {audiocraft.Clips:0000}
                         Utility.Log(nameof(Main), $"Begin choice '{choice}'.");
                         break;
                     // End choice.
-                    case ({ Audio: { } audio, Icons: ({ } image, { } sound), Color: var color } chosen, var moving) when chosen == moving && comfy.Has(begin: choice.version):
+                    case ({ Audio: { } audio, Icons: ({ } image, { } sound), Color: var color } chosen, var moving)
+                        when chosen == moving && choice.version.IsCompleted && comfy.Has(begin: choice.version.Result):
                         Utility.Log(nameof(Main), $"End choice '{choice}'.");
                         Flash.color = color.Color(0.25f);
                         bloom.intensity.value = 25f;
@@ -167,13 +171,12 @@ Clips: {audiocraft.Clips:0000}
                         Rumble.Stop();
                         Move.Play();
                         comfy.Set(play: true);
-                        comfy.WriteEnd();
                         audiocraft.Set(motion: -1f);
-                        audiocraft.WriteClips(choice.prompt, Convert.ToBase64String(audio.GetRawData()));
                         positive = choice.positive;
                         prompt = choice.prompt;
+                        foreach (var item in Utility.Wait(audiocraft.WriteClips(choice.prompt, sound.Data), comfy.WriteEnd())) yield return item;
                         previous = GenerateIcons(choice.version, Array.IndexOf(arrows, chosen), previous);
-                        choice = (0, positive, prompt, null);
+                        choice = (Task.FromResult(0), positive, prompt, null);
                         foreach (var arrow in arrows) arrow.Hide();
                         _ = Save(chosen, image, sound, positive, prompt);
                         break;
@@ -195,8 +198,8 @@ Clips: {audiocraft.Clips:0000}
                         Utility.Log(nameof(Main), $"Cancel choice '{choice}'.");
                         Rumble.Stop();
                         comfy.Set(play: true);
-                        comfy.WriteCancel(choice.version);
-                        choice = (0, positive, prompt, null);
+                        foreach (var item in Utility.Wait(comfy.WriteCancel(choice.version))) yield return item;
+                        choice = (Task.FromResult(0), positive, prompt, null);
                         break;
                     case (null, null):
                         comfy.Set(play: true);
@@ -213,13 +216,13 @@ Clips: {audiocraft.Clips:0000}
                 yield return null;
             }
 
-            Task<Ollama.Generation[]> GenerateIcons(int version, int index, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
+            Task<Ollama.Generation[]> GenerateIcons(Task<int> version, int index, Task<Ollama.Generation[]> previous) => Task.WhenAll(arrows.Select(async arrow =>
             {
                 var random = new System.Random();
                 var generations = await previous;
                 var generation = await ollama.Generate(arrow.Color, generations.At(index));
                 await Task.WhenAll(
-                    comfy.WriteIcon(arrow, version, generation.Image),
+                    comfy.WriteIcon(arrow, await version, generation.Image),
                     audiocraft.WriteIcon(arrow, generation.Sound));
                 return generation;
             }));
@@ -262,12 +265,16 @@ Clips: {audiocraft.Clips:0000}
             }
         }
 
-        async Task Save(Arrow arrow, Comfy.Icon image, Audiocraft.Icon sound, string positive, string prompt) =>
+        async Task Save(Arrow arrow, Comfy.Icon image, Audiocraft.Icon sound, string positive, string prompt)
+        {
+            var data = await Task.WhenAll(
+                Task.Run(() => Convert.ToBase64String(image.Data.Length > 0 ? image.Data : arrow.Texture?.GetRawTextureData() ?? Array.Empty<byte>())),
+                Task.Run(() => Convert.ToBase64String(sound.Data.Length > 0 ? sound.Data : arrow.Audio?.GetRawData() ?? Array.Empty<byte>())));
             await File.AppendAllLinesAsync(_history, new[] { JsonUtility.ToJson(new Entry
             {
                 Date = DateTime.UtcNow.Ticks,
-                Image = image.Data.Length > 0 ? Convert.ToBase64String(image.Data) : arrow.Texture == null ? "" : Convert.ToBase64String(arrow.Texture.GetRawTextureData()),
-                Sound = sound.Data.Length > 0 ? Convert.ToBase64String(sound.Data) :arrow.Audio == null ? "" : Convert.ToBase64String(arrow.Audio.GetRawData()),
+                Image = data[0],
+                Sound = data[1],
                 Color = arrow.Color,
                 Width = image.Width,
                 Height = image.Height,
@@ -277,6 +284,7 @@ Clips: {audiocraft.Clips:0000}
                 Positive = positive,
                 Prompt = prompt,
             }) });
+        }
 
         async Task<Entry?> Load() =>
             File.Exists(_history) && await File.ReadAllLinesAsync(_history) is { Length: > 0 } lines ?

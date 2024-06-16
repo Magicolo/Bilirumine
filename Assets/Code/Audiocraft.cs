@@ -31,7 +31,7 @@ public sealed class Audiocraft
         public int[] Cancel = Array.Empty<int>();
         public int[] Pause = Array.Empty<int>();
         public int[] Resume = Array.Empty<int>();
-        public string Data = "";
+        public byte[] Data = Array.Empty<byte>();
 
         public override string ToString() => $@"{{
 ""version"":{Version},
@@ -45,7 +45,7 @@ public sealed class Audiocraft
 ""cancel"":[{string.Join(",", Cancel)}],
 ""pause"":[{string.Join(",", Pause)}],
 ""resume"":[{string.Join(",", Resume)}],
-""data"":""{Data}"",
+""data"":""{Convert.ToBase64String(Data)}"",
 }}".Replace("\n", "").Replace("\r", "");
     }
 
@@ -120,6 +120,7 @@ public sealed class Audiocraft
     float _motion = 1f;
     float _pitch = 1f;
     bool _pause;
+    Clip _last = new();
     readonly Memory _memory = Utility.Memory("sound");
     readonly ConcurrentQueue<Clip> _clips = new();
     readonly ConcurrentQueue<Icon> _icons = new();
@@ -146,8 +147,14 @@ public sealed class Audiocraft
             if (_clips.TryDequeue(out var clip))
             {
                 if (_cancel.Contains(clip.Version)) continue;
+                else
+                {
+                    var last = _last;
+                    _last = clip;
+                    Pool<byte>.Put(ref last.Data);
+                }
 
-                Load(clip, ref load);
+                Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref load);
                 @in.clip = load;
                 @in.volume = 0f;
                 (main, load) = (load, main);
@@ -177,7 +184,8 @@ public sealed class Audiocraft
                     if (icon.Tags.HasFlag(arrow.Tags))
                     {
                         var audio = arrow.Audio;
-                        Load(icon, ref audio);
+                        Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
+                        if (arrow.Icons.sound is { } sound) Pool<byte>.Put(ref sound.Data);
                         arrow.Audio = audio;
                         arrow.Sound.clip = arrow.Audio;
                         arrow.Icons.sound = icon;
@@ -190,32 +198,33 @@ public sealed class Audiocraft
 
     public IEnumerator UpdatePause()
     {
-        foreach (var item in Loop())
+        foreach (var outer in Loop())
         {
             if (_requests.TryGetValue((Tags.Clip, true), out var request))
             {
                 switch (_pause, _clips.Count(clip => clip.Version == request.Version))
                 {
                     case (false, > 5):
-                        Write(new() { Version = Request.Reserve(), Pause = new[] { request.Version } }, false);
+                        foreach (var inner in Utility.Wait(Write(new() { Version = Request.Reserve(), Pause = new[] { request.Version } }, false)))
+                            yield return inner;
                         _pause = true;
                         break;
                     case (true, < 5):
-                        Write(new() { Version = Request.Reserve(), Resume = new[] { request.Version } }, false);
+                        foreach (var inner in Utility.Wait(Write(new() { Version = Request.Reserve(), Resume = new[] { request.Version } }, false)))
+                            yield return inner;
                         _pause = false;
                         break;
                 }
             }
-            yield return item;
+            yield return outer;
         }
     }
 
-    public void WriteClips(string prompt, string? data)
+    public async Task WriteClips(string prompt, byte[]? data)
     {
         var cancel = 0;
         if (_requests.TryRemove((Tags.Clip, true), out var request)) _cancel.Add(cancel = request.Version);
-
-        Write(new()
+        await Write(new()
         {
             Version = Request.Reserve(),
             Tags = Tags.Clip,
@@ -225,7 +234,7 @@ public sealed class Audiocraft
             Empty = true,
             Cancel = new[] { cancel },
             Prompts = new[] { prompt },
-            Data = data ?? "",
+            Data = data ?? Array.Empty<byte>(),
         }, true);
     }
 
@@ -235,7 +244,7 @@ public sealed class Audiocraft
         var version = Request.Reserve();
         var tags = Tags.Icon | arrow.Tags;
         var prompt = $"{Utility.Styles("punchy", "jingle", "stinger", "notification")} ({arrow.Color}) {description}";
-        Write(new()
+        await Write(new()
         {
             Version = version,
             Tags = tags,
@@ -297,35 +306,23 @@ public sealed class Audiocraft
         }
     }
 
-    void Write(Request request, bool store)
+    async Task Write(Request request, bool store)
     {
-        foreach (var _ in Loop()) if (TryWrite(request, store)) break;
+        foreach (var _ in Loop()) if (await TryWrite(request, store)) break;
     }
 
-    bool TryWrite(Request request, bool store)
+    async Task<bool> TryWrite(Request request, bool store)
     {
         if (store) _requests.AddOrUpdate((request.Tags, request.Loop), request, (_, _) => request);
         try
         {
             Log($"Sending input '{request}'.");
-            _process.StandardInput.WriteLine($"{request}");
-            _process.StandardInput.Flush();
+            await _process.StandardInput.WriteLineAsync($"{request}");
+            await _process.StandardInput.FlushAsync();
             return true;
         }
         catch (Exception exception) { Except(exception); }
         return false;
-    }
-
-    void Load(Clip clip, ref AudioClip? audio)
-    {
-        Load(clip.Rate, clip.Samples, clip.Channels, clip.Data, ref audio);
-        Pool<byte>.Put(ref clip.Data);
-    }
-
-    void Load(Icon icon, ref AudioClip? audio)
-    {
-        Load(icon.Rate, icon.Samples, icon.Channels, icon.Data, ref audio);
-        Pool<byte>.Put(ref icon.Data);
     }
 
     IEnumerable Loop()
@@ -340,7 +337,8 @@ public sealed class Audiocraft
                     {
                         Warn("Restarting docker container.");
                         _process = Utility.Docker("audiocraft");
-                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version)) TryWrite(pair.Value, true);
+                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version))
+                            TryWrite(pair.Value, true).Wait();
                     }
                 }
             }

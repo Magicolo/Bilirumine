@@ -55,7 +55,7 @@ public sealed class Comfy
         public string Positive = "";
         public string Negative = "";
         public string Description = "";
-        public string Data = "";
+        public byte[] Data = Array.Empty<byte>();
         public Request? Next;
         public Request Last => Next is { } next ? next.Last : this;
 
@@ -83,7 +83,7 @@ public sealed class Comfy
 ""positive"":""{Positive.Escape()}"",
 ""negative"":""{Negative.Escape()}"",
 ""load"":""{Load}"",
-""data"":""{Data}"",
+""data"":""{Convert.ToBase64String(Data)}"",
 ""next"":{Next?.ToString() ?? "None"},
 }}".Replace("\n", "").Replace("\r", "");
     }
@@ -266,7 +266,8 @@ public sealed class Comfy
                     if (icon.Tags.HasFlag(arrow.Tags))
                     {
                         var texture = arrow.Texture;
-                        Load(icon, arrow.Image, ref texture);
+                        Load(icon.Width, icon.Height, icon.Data, arrow.Image, ref texture);
+                        if (arrow.Icons.image is { } image) Pool<byte>.Put(ref image.Data);
                         arrow.Texture = texture;
                         arrow.Icons.image = icon;
                     }
@@ -351,15 +352,15 @@ public sealed class Comfy
         }
     }
 
-    public void WriteFrames(string positive, int? width, int? height, string? data)
+    public async Task WriteFrames(string positive, int? width, int? height, byte[]? data)
     {
         var cancel = 0;
         if (_requests.TryRemove((_frame.Tags, true), out var request)) _cancel.Add(cancel = request.Version);
 
-        Write(_frame with
+        await Write(_frame with
         {
             Version = Request.Reserve(),
-            Data = data ?? "",
+            Data = data ?? Array.Empty<byte>(),
             Empty = true,
             Shape = (width ?? 0, height ?? 0),
             Positive = positive,
@@ -367,7 +368,7 @@ public sealed class Comfy
         }, true);
     }
 
-    public int WriteBegin(Arrow arrow, (string from, string to) positives)
+    public async Task<int> WriteBegin(Arrow arrow, (string from, string to) positives)
     {
         var pause = 0;
         if (_requests.TryGetValue((_frame.Tags, true), out var request)) pause = request.Version;
@@ -382,7 +383,7 @@ public sealed class Comfy
             Top = Math.Max(arrow.Direction.y, 0),
             Bottom = Math.Max(-arrow.Direction.y, 0),
         };
-        Write(Request.Sequence(
+        await Write(Request.Sequence(
             template with { Tags = template.Tags | Tags.Begin, Positive = positives.from },
             template with { Tags = template.Tags, Positive = $"{positives.from} {positives.to}" },
             template with { Tags = template.Tags, Positive = $"{positives.to} {positives.from}" },
@@ -392,28 +393,29 @@ public sealed class Comfy
         return version;
     }
 
-    public void WriteEnd()
+    public async Task WriteEnd()
     {
         var cancel = 0;
         if (_requests.TryRemove((_frame.Tags, true), out var request))
             _cancel.Add(cancel = request.Version);
         if (_requests.TryRemove((_move.Tags | Tags.Begin, true), out request) && request.Last with { Empty = true } is { } last)
             _requests.AddOrUpdate((last.Tags, true), last, (_, _) => last);
-        Write(new() { Version = Request.Reserve(), Cancel = new[] { cancel } }, false);
+        await Write(new() { Version = Request.Reserve(), Cancel = new[] { cancel } }, false);
     }
 
-    public void WriteCancel(int version)
+    public async Task WriteCancel(Task<int> version)
     {
+        var cancel = await version;
         var resume = 0;
         if (_requests.TryGetValue((_frame.Tags, true), out var request)) resume = request.Version;
-        _cancel.Add(version);
-        Write(new() { Version = Request.Reserve(), Resume = new[] { resume }, Cancel = new[] { version } }, false);
+        _cancel.Add(cancel);
+        await Write(new() { Version = Request.Reserve(), Resume = new[] { resume }, Cancel = new[] { cancel } }, false);
     }
 
     public async Task WriteIcon(Arrow arrow, int version, string positive)
     {
         for (int i = 0; i < 256 && _end < version; i++) await Task.Delay(100);
-        Write(_icon with
+        await Write(_icon with
         {
             Version = Request.Reserve(),
             Tags = _icon.Tags | arrow.Tags,
@@ -423,35 +425,29 @@ public sealed class Comfy
         }, true);
     }
 
-    void Write(Request request, bool store)
+    async Task Write(Request request, bool store)
     {
-        foreach (var _ in Loop()) if (TryWrite(request, store)) break;
+        foreach (var _ in Loop()) if (await TryWrite(request, store)) break;
     }
 
-    bool TryWrite(Request request, bool store)
+    async Task<bool> TryWrite(Request request, bool store)
     {
         if (store) _requests.AddOrUpdate((request.Tags, request.Last.Loop), request, (_, _) => request);
         if (request.Continue && _last is { } last) request = request with
         {
             Shape = (last.Width, last.Height),
-            Data = Convert.ToBase64String(last.Data),
+            Data = last.Data,
         };
 
         try
         {
             Log($"Sending input '{request}'.");
-            _process.StandardInput.WriteLine($"{request}");
-            _process.StandardInput.Flush();
+            await _process.StandardInput.WriteLineAsync($"{request}");
+            await _process.StandardInput.FlushAsync();
             return true;
         }
         catch (Exception exception) { Except(exception); }
         return false;
-    }
-
-    void Load(Icon icon, Image image, ref Texture2D? texture)
-    {
-        Load(icon.Width, icon.Height, icon.Data, image, ref texture);
-        Pool<byte>.Put(ref icon.Data);
     }
 
     IEnumerable Loop()
@@ -466,7 +462,8 @@ public sealed class Comfy
                     {
                         Warn("Restarting docker container.");
                         _process = Utility.Docker("comfy");
-                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version)) TryWrite(pair.Value, true);
+                        foreach (var pair in _requests.OrderBy(pair => pair.Value.Version))
+                            TryWrite(pair.Value, true).Wait();
                     }
                 }
             }
