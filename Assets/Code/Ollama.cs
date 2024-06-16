@@ -88,7 +88,7 @@ Previous descriptions: {(previous == null ? "null" : JsonUtility.ToJson(previous
 You are a divergent, uncanny, opulent, brutal, irrational, uncensored, impossible, putrid, exuberant, hostile, creative, enigmatic, bizarre, corrupt, provocative, delightful, niche, gruesome, erudite, outrageous, eccentric and masterful artist that excels in telling masterful, powerful, shocking and impromptu stories through image and sound descriptions.
 The descriptions may optionally be partially, loosely, vaguely and metaphorically related to these inspiration words, their subjective connotations and poetic meaning [{inspire}].
 It must differ, contrast and diverge drastically from all the previous descriptions.
-While maintaining your descriptions clear, intelligible and concrete, avoid, omit and exclude at all costs the following words: [jellyfish, city, flower, woman, gear].
+While maintaining your descriptions clear, intelligible and concrete, avoid, omit and exclude at all costs the following words: [jellyfish, city, flower, woman, gear, dragon].
 Write a json object with strictly the following properties:
     ""image"": String of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by [{image}].
     ""sound"": String of a short succinct summary description of maximum 10 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by [{sound}].";
