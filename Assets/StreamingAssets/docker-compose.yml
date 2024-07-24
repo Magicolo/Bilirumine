@@ -44,9 +44,7 @@ services:
 
   ollama:
     image: ollama
-    build: 
-      context: .
-      dockerfile: ./Ollama
+    build: ./Ollama
     environment:
       - OLLAMA_KEEP_ALIVE=-1
       - OLLAMA_MAX_VRAM=2500000000

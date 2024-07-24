@@ -98,7 +98,7 @@ Write a json object with strictly the following properties:
             {
                 var json = JsonUtility.ToJson(new Request
                 {
-                    model = "llama3",
+                    model = "llama3.1",
                     prompt = prompt,
                     stream = false,
                     format = "json",
