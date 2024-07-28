@@ -91,7 +91,7 @@ It must differ, contrast and diverge drastically from all the previous descripti
 While maintaining your descriptions clear, intelligible and concrete, avoid, omit and exclude at all costs the following words: [jellyfish, city, flower, woman, gear, dragon].
 Write a json object with strictly the following properties:
     ""image"": String of a short succinct summary description of maximum 25 words of an image with specific details about the subjects, themes, colors, shapes, composition and visual styles inspired by [{image}].
-    ""sound"": String of a short succinct summary description of maximum 10 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by [{sound}].";
+    ""sound"": String of a short succinct summary description of maximum 25 words of the musical soundtrack and ambiance soundscape that supports the image with specific details about the instrumentation, melodies, harmonies, rhythms and music styles inspired by [{sound}].";
         foreach (var item in Loop())
         {
             try

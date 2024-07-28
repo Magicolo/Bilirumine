@@ -47,7 +47,6 @@ services:
     build: ./Ollama
     environment:
       - OLLAMA_KEEP_ALIVE=-1
-      - OLLAMA_MAX_VRAM=2500000000
     ports:
       - 11432:11434
     volumes:

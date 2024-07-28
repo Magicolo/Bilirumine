@@ -15,7 +15,7 @@ from nodes import (
     ImageScale,
     ImagePadForOutpaint,
     VAEDecode,
-    init_custom_nodes,
+    init_extra_nodes,
 )
 
 
@@ -238,7 +238,7 @@ def write(receive: SimpleQueue):
 
 
 with Memory("image") as MEMORY:
-    init_custom_nodes()
+    init_extra_nodes()
     a = SimpleQueue()
     b = SimpleQueue()
     c = SimpleQueue()

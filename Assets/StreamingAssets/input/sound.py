@@ -78,6 +78,12 @@ def write(receive: SimpleQueue):
         utility.output(response)
 
 
+# Reserve cuda memory such that it is not used by other processes.
+pool = torch.cuda.ByteTensor(int(2.5 * 1024**3))
+torch.cuda.empty_cache()
+del pool
+
+
 with Memory("sound") as MEMORY:
     RATE = 32000
     a = SimpleQueue()

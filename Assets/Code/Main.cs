@@ -31,8 +31,6 @@ public sealed class Main : MonoBehaviour
     sealed record Entry
     {
         public long Date;
-        public string Image = "";
-        public string Sound = "";
         public Colors Color;
         public int Width;
         public int Height;
@@ -41,6 +39,8 @@ public sealed class Main : MonoBehaviour
         public int Channels;
         public string Positive = "";
         public string Prompt = "";
+        public string Image = "";
+        public string Sound = "";
     }
 
     static readonly string _history = Path.Join(Application.streamingAssetsPath, "history.json");
@@ -269,7 +269,7 @@ Clips: {audiocraft.Clips:0000}
             var data = await Task.WhenAll(
                 Task.Run(() => Convert.ToBase64String(image.Data.Length > 0 ? image.Data : arrow.Texture?.GetRawTextureData() ?? Array.Empty<byte>())),
                 Task.Run(() => Convert.ToBase64String(sound.Data.Length > 0 ? sound.Data : arrow.Audio?.GetRawData() ?? Array.Empty<byte>())));
-            await File.AppendAllLinesAsync(_history, new[] { JsonUtility.ToJson(new Entry
+            await File.WriteAllLinesAsync(_history, new[] { JsonUtility.ToJson(new Entry
             {
                 Date = DateTime.UtcNow.Ticks,
                 Image = data[0],
