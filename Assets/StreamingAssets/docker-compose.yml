@@ -18,14 +18,14 @@ services:
       - ~/Projects/ai/comfy/Comfy:/comfy
       - comfy:/root/.cache
     entrypoint: python /input/image.py
-    
+
     deploy:
       resources:
         reservations:
           devices:
             - capabilities: [ gpu ]
-              device_ids: ['0']
-  
+              device_ids: [ '0' ]
+
   audiocraft:
     image: audiocraft
     build: ./Audiocraft
@@ -40,7 +40,7 @@ services:
         reservations:
           devices:
             - capabilities: [ gpu ]
-              device_ids: ['1']
+              device_ids: [ '1' ]
 
   ollama:
     image: ollama
@@ -56,4 +56,4 @@ services:
         reservations:
           devices:
             - capabilities: [ gpu ]
-              device_ids: ['1']
+              device_ids: [ '2' ]
